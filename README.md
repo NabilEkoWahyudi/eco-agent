@@ -293,13 +293,3 @@ eco   # select Ollama and enter the model name
 - **npm** >= 8
 
 ---
-
-## 📄 License
-
-MIT © [Eco Agent Contributors](eco-agent-main/LICENSE)
-
----
-
-<p align="center">
-  Built with ❤️ · Powered by Groq, Ollama & the open-source community
-</p>
