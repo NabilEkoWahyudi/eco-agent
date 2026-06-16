@@ -1,0 +1,9 @@
+{
+  "name": "eco-plugin-websearch",
+  "version": "1.0.0",
+  "description": "Web search tool for Eco Agent — powered by DuckDuckGo (no API key needed)",
+  "main": "index.js",
+  "type": "commonjs",
+  "keywords": ["eco-agent", "eco-plugin"],
+  "license": "MIT"
+}

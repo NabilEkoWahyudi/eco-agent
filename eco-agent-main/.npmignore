@@ -1,0 +1,15 @@
+# Source files (only dist/ is published)
+src/
+*.ts
+!*.d.ts
+
+# Dev files
+.eco/
+.env
+.env.*
+tsconfig.json
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

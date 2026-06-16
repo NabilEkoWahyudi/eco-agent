@@ -1,0 +1,67 @@
+{
+  "name": "eco-agent",
+  "version": "0.1.0",
+  "description": "Eco Agent — lightweight agentic CLI powered by local & cloud LLMs (Groq, Ollama)",
+  "type": "module",
+  "bin": {
+    "eco": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "dev": "tsx src/cli/index.ts",
+    "start": "node dist/cli/index.js",
+    "prepublishOnly": "npm run build",
+    "install:global": "npm run build && npm install -g .",
+    "uninstall:global": "npm uninstall -g eco-agent",
+    "clean": "rm -rf dist"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "llm",
+    "groq",
+    "ollama",
+    "mcp",
+    "model-context-protocol",
+    "agentic",
+    "terminal",
+    "coding-assistant",
+    "eco-agent"
+  ],
+  "author": {
+    "name": "Eco Agent Contributors"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/NabilEkoWahyudi/eco-agent#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NabilEkoWahyudi/eco-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NabilEkoWahyudi/eco-agent/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ansi-escapes": "^7.3.0",
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "conf": "^15.1.0",
+    "eventemitter3": "^5.0.4",
+    "p-limit": "^7.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
