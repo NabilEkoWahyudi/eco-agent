@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, rmSync, renameSync } from 'fs'
 import { execSync } from 'child_process'
 import { resolve, extname } from 'path'
 import type { Tool } from '../utils/types.js'
@@ -41,6 +41,10 @@ export const writeFileTool: Tool = {
     if (!safety.safe) return `Error: ${safety.reason}`
 
     try {
+      const dirPath = resolve(filePath, '..')
+      if (!existsSync(dirPath)) {
+        mkdirSync(dirPath, { recursive: true })
+      }
       writeFileSync(filePath, args.content as string, 'utf-8')
       return `Successfully wrote to ${filePath}`
     } catch (e) {
@@ -70,6 +74,73 @@ export const listDirTool: Tool = {
       return `Contents of ${dirPath}:\n\n${lines.join('\n')}`
     } catch (e) {
       return `Error listing directory: ${(e as Error).message}`
+    }
+  }
+}
+
+export const createDirTool: Tool = {
+  name: 'create_directory',
+  description: 'Create a new directory (including parent directories if needed)',
+  parameters: {
+    path: { type: 'string', description: 'Path to create', required: true }
+  },
+  async execute(args) {
+    const dirPath = resolve(args.path as string)
+    const safety = checkFilePath(dirPath)
+    if (!safety.safe) return `Error: ${safety.reason}`
+
+    try {
+      mkdirSync(dirPath, { recursive: true })
+      return `Successfully created directory ${dirPath}`
+    } catch (e) {
+      return `Error creating directory: ${(e as Error).message}`
+    }
+  }
+}
+
+export const deletePathTool: Tool = {
+  name: 'delete_path',
+  description: 'Delete a file or directory (recursively)',
+  parameters: {
+    path: { type: 'string', description: 'Path to delete', required: true }
+  },
+  async execute(args) {
+    const targetPath = resolve(args.path as string)
+    const safety = checkFilePath(targetPath)
+    if (!safety.safe) return `Error: ${safety.reason}`
+
+    try {
+      if (!existsSync(targetPath)) return `Error: Path not found: ${targetPath}`
+      rmSync(targetPath, { recursive: true, force: true })
+      return `Successfully deleted ${targetPath}`
+    } catch (e) {
+      return `Error deleting path: ${(e as Error).message}`
+    }
+  }
+}
+
+export const renamePathTool: Tool = {
+  name: 'rename_path',
+  description: 'Rename or move a file or directory',
+  parameters: {
+    oldPath: { type: 'string', description: 'Current path', required: true },
+    newPath: { type: 'string', description: 'New path', required: true }
+  },
+  async execute(args) {
+    const oldPath = resolve(args.oldPath as string)
+    const newPath = resolve(args.newPath as string)
+    
+    const safety1 = checkFilePath(oldPath)
+    if (!safety1.safe) return `Error: ${safety1.reason}`
+    const safety2 = checkFilePath(newPath)
+    if (!safety2.safe) return `Error: ${safety2.reason}`
+
+    try {
+      if (!existsSync(oldPath)) return `Error: Path not found: ${oldPath}`
+      renameSync(oldPath, newPath)
+      return `Successfully renamed ${oldPath} to ${newPath}`
+    } catch (e) {
+      return `Error renaming path: ${(e as Error).message}`
     }
   }
 }
@@ -167,11 +238,51 @@ export const listCodeFilesTool: Tool = {
   }
 }
 
+export const webSearchTool: Tool = {
+  name: 'web_search',
+  description: 'Search the web for real-time information using DuckDuckGo',
+  parameters: {
+    query: { type: 'string', description: 'Search query', required: true }
+  },
+  async execute(args) {
+    const query = encodeURIComponent(args.query as string)
+    try {
+      const res = await fetch(`https://html.duckduckgo.com/html/?q=${query}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+      })
+      if (!res.ok) return `Error searching the web: HTTP ${res.status}`
+      
+      const html = await res.text()
+      const results: string[] = []
+      
+      // Simple regex based HTML scraping for DDG Lite
+      const titleRegex = /<a class="result__url" href="[^"]+">([^<]+)<\/a>/g
+      const snippetRegex = /<a class="result__snippet[^>]+>(.*?)<\/a>/g
+      
+      let titleMatch, snippetMatch
+      let count = 0
+      while ((titleMatch = titleRegex.exec(html)) !== null && (snippetMatch = snippetRegex.exec(html)) !== null && count < 5) {
+        results.push(`- ${titleMatch[1].trim()}\n  ${snippetMatch[1].replace(/<[^>]+>/g, '').trim()}`)
+        count++
+      }
+      
+      if (results.length === 0) return `No results found for "${args.query}"`
+      return `Search results for "${args.query}":\n\n${results.join('\n\n')}`
+    } catch (e) {
+      return `Error searching the web: ${(e as Error).message}`
+    }
+  }
+}
+
 export const defaultTools: Tool[] = [
   readFileTool,
   writeFileTool,
+  createDirTool,
+  deletePathTool,
+  renamePathTool,
   listDirTool,
   shellTool,
   searchFilesTool,
-  listCodeFilesTool
+  listCodeFilesTool,
+  webSearchTool
 ]

@@ -10,7 +10,7 @@ import { getSavedConfig, saveConfig, clearConfig } from '../utils/configStore.js
 import { runSetupWizard } from '../utils/setupWizard.js'
 import { installPlugin, removePlugin, loadAllPlugins, listPlugins, getPluginsDir } from '../plugins/manager.js'
 import { saveSession, loadSession, listSessions, deleteSession, renameSession, formatRelativeTime } from '../session/manager.js'
-import { Spinner, StatusBar, renderMarkdown, renderToolCall, renderToolResult, renderDivider } from './tui.js'
+import { Spinner, StatusBar, renderMarkdown, renderToolCall, renderToolResult, renderDivider, renderDiff } from './tui.js'
 import { listServers, addServer, removeServer } from '../mcp/registry.js'
 import { scanProject, saveProjectContext, loadProjectContext, loadCustomPrompt, buildSystemPromptWithContext, getEcoDir } from '../project/scanner.js'
 import { planSwarm, } from '../swarm/planner.js'
@@ -33,18 +33,21 @@ ${chalk.gray('                                                            v' + V
 
 function printBanner() { console.log(BANNER) }
 
-function buildEcoConfig(mode: string, apiKey?: string, model?: string, systemPrompt?: string): EcoConfig {
+function buildEcoConfig(mode: string, apiKey?: string, model?: string, systemPrompt?: string, baseUrl?: string): EcoConfig {
   if (mode === 'mock') {
     return { provider: { type: 'mock' as never, model: 'mock' }, maxIterations: 10, verbose: false }
   }
   const defaultModel = mode === 'openrouter'
     ? 'meta-llama/llama-3.3-70b-instruct:free'
-    : 'llama-3.3-70b-versatile'
+    : mode === 'ollama'
+      ? 'llama3.2'
+      : 'llama-3.3-70b-versatile'
   return {
     provider: {
       type: mode as EcoConfig['provider']['type'],
       model: model ?? defaultModel,
-      apiKey
+      apiKey,
+      baseUrl
     },
     maxIterations: 10,
     verbose: false,
@@ -68,7 +71,9 @@ async function runREPL(
     ? chalk.yellow('Mock (testing)')
     : modeName === 'openrouter'
       ? chalk.magenta(`OpenRouter / ${modelName.split('/').pop()}`)
-      : chalk.cyan(`Groq / ${modelName}`)
+      : modeName === 'ollama'
+        ? chalk.blue(`Ollama / ${modelName}`)
+        : chalk.cyan(`Groq / ${modelName}`)
 
   console.log(chalk.gray(`  Mode     : ${modeLabel}`))
   console.log(chalk.gray(`  Tools    : ${chalk.white(tools.map(t => t.name).join(', '))}`))
@@ -103,19 +108,55 @@ async function runREPL(
     if (history.length === 0) return
     const meta = saveSession(history, config.provider.type, config.provider.model, currentSessionId)
     if (!currentSessionId) currentSessionId = meta.id
-    statusBar.update({ sessionId: currentSessionId, msgCount: history.length })
+    statusBar.update({ sessionId: currentSessionId, msgCount: history.length, tokens: agent.getTotalTokens() })
   }
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true })
 
-  const prompt = () => {
+  // Smart input reader: detects multi-line paste automatically.
+  // Lines arriving within 50ms of each other are collected as a single block.
+  // A single-line enter submits immediately after the paste-detection window.
+  const readInput = (promptStr: string): Promise<string> => {
+    return new Promise((resolve) => {
+      process.stdout.write(promptStr)
+      const lines: string[] = []
+      let timer: ReturnType<typeof setTimeout> | null = null
+      let done = false
+
+      const finish = () => {
+        if (done) return
+        done = true
+        rl.removeListener('line', onLine)
+        // Remove trailing empty lines from paste
+        while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop()
+        resolve(lines.join('\n'))
+      }
+
+      const onLine = (line: string) => {
+        if (done) return
+        if (timer) clearTimeout(timer)
+        lines.push(line)
+        // 50ms window: if more lines arrive within 50ms, they're part of a paste
+        timer = setTimeout(finish, 50)
+      }
+
+      rl.on('line', onLine)
+    })
+  }
+
+  const prompt = async (): Promise<void> => {
     statusBar.print()
+    const home = process.env.HOME || process.env.USERPROFILE || ''
+    const shortCwd = process.cwd().startsWith(home)
+      ? '~' + process.cwd().slice(home.length)
+      : process.cwd()
+    const cwdLabel = chalk.dim.yellow(shortCwd)
     const modePrompt = agentMode === 'plan'
-      ? chalk.yellow('eco [plan] › ')
-      : chalk.green('eco › ')
-    rl.question(modePrompt, async (input) => {
-      const trimmed = input.trim()
-      if (!trimmed) return prompt()
+      ? `${cwdLabel} ${chalk.yellow('eco [plan] › ')}`
+      : `${cwdLabel} ${chalk.green('eco › ')}`
+    const input = await readInput(modePrompt)
+    let trimmed = input.trim()
+    if (!trimmed) return prompt()
 
       if (trimmed.startsWith('/')) {
         const [cmd, ...rest] = trimmed.split(' ')
@@ -136,9 +177,9 @@ async function runREPL(
             saveConfig(newSaved)
             const reloadedPlugins = await loadAllPlugins()
             await runREPL(
-              buildEcoConfig(newSaved.mode, newSaved.apiKey, newSaved.model),
+              buildEcoConfig(newSaved.mode, newSaved.apiKey, newSaved.model, undefined, newSaved.baseUrl),
               newSaved.mode,
-              newSaved.model ?? 'llama-3.3-70b-versatile',
+              newSaved.model ?? (newSaved.mode === 'ollama' ? 'llama3.2' : 'llama-3.3-70b-versatile'),
               [...defaultTools, ...reloadedPlugins],
               undefined,
               reloadedPlugins.length
@@ -153,6 +194,65 @@ async function runREPL(
             printBanner()
             console.log(chalk.gray('  Context cleared.\n'))
             break
+
+          case '/cd': {
+            const targetPath = rest.join(' ').trim()
+            if (!targetPath) {
+              // /cd with no args = go to home
+              const home = process.env.HOME || process.env.USERPROFILE || process.cwd()
+              process.chdir(home)
+            } else if (targetPath === '-') {
+              // /cd - = go back (not tracked, just warn)
+              console.log(chalk.yellow('\n  ⚠ /cd - (go back) is not supported. Use the full path.\n'))
+              return prompt()
+            } else {
+              const pathModule = await import('path')
+              const fsModule = await import('fs')
+              const newPath = pathModule.resolve(process.cwd(), targetPath)
+              if (!fsModule.existsSync(newPath)) {
+                console.log(chalk.red(`\n  ✗ Directory not found: ${newPath}\n`))
+                return prompt()
+              }
+              const stat = fsModule.statSync(newPath)
+              if (!stat.isDirectory()) {
+                console.log(chalk.red(`\n  ✗ Not a directory: ${newPath}\n`))
+                return prompt()
+              }
+              process.chdir(newPath)
+            }
+            const cwd = process.cwd()
+            statusBar.update({ cwd })
+            console.log(chalk.green(`\n  ✓ Now in: ${chalk.white(cwd)}\n`))
+            break
+          }
+
+          case '/file': {
+            // Load content of a file directly as context
+            const filePath = rest.join(' ').trim()
+            if (!filePath) {
+              console.log(chalk.yellow('\n  Usage: /file <path>\n'))
+              return prompt()
+            }
+            try {
+              const fs = await import('fs')
+              const path = await import('path')
+              const abs = path.resolve(filePath)
+              if (!fs.existsSync(abs)) {
+                console.log(chalk.red(`\n  ✗ File not found: ${abs}\n`))
+                return prompt()
+              }
+              const content = fs.readFileSync(abs, 'utf-8')
+              console.log(chalk.cyan(`\n  ✓ Loaded ${abs} (${content.split('\n').length} lines, ${content.length} chars)`))
+              console.log(chalk.gray('  Enter your instruction for this file:'))
+              console.log()
+              const instruction = await new Promise<string>(r => rl.question(chalk.green('  Instruction: '), r))
+              trimmed = `File: ${abs}\n\`\`\`\n${content}\n\`\`\`\n\nInstruction: ${instruction.trim() || 'Analyze this file.'}`
+            } catch (e) {
+              console.log(chalk.red(`\n  ✗ Error reading file: ${(e as Error).message}\n`))
+              return prompt()
+            }
+            break // fall through to agent.run
+          }
 
           case '/history': {
             const history = agent.getHistory()
@@ -237,6 +337,65 @@ async function runREPL(
             } else {
               console.log(chalk.gray('  Cancelled.\n'))
             }
+            break
+          }
+
+          case '/commit': {
+            const child_process = await import('child_process')
+            let diff = ''
+            try {
+              diff = child_process.execSync('git diff --cached', { encoding: 'utf-8' })
+              if (!diff) {
+                console.log(chalk.yellow('\n  No staged changes found. Please stage files with `git add` first.\n'))
+                break
+              }
+            } catch (e) {
+              console.log(chalk.red('\n  ✗ Error reading git diff. Are you in a git repository?\n'))
+              break
+            }
+            
+            console.log(chalk.cyan('\n  ⟳ Generating commit message...\n'))
+            const promptStr = `Based on the following git diff, generate a concise, descriptive commit message following Conventional Commits format. Output ONLY the commit message without quotes or extra text.\n\nDiff:\n${diff}`
+            agentMode = 'act' // Force execution
+            trimmed = promptStr
+            break // Fall through to agent.run
+          }
+
+          case '/pr': {
+            const child_process = await import('child_process')
+            let log = ''
+            try {
+              log = child_process.execSync('git log origin/main..HEAD --oneline', { encoding: 'utf-8' })
+              if (!log) {
+                console.log(chalk.yellow('\n  No new commits found compared to origin/main.\n'))
+                break
+              }
+            } catch (e) {
+              try {
+                log = child_process.execSync('git log -n 5 --oneline', { encoding: 'utf-8' })
+              } catch {
+                console.log(chalk.red('\n  ✗ Error reading git log.\n'))
+                break
+              }
+            }
+            
+            console.log(chalk.cyan('\n  ⟳ Generating Pull Request description...\n'))
+            const promptStr = `Based on the following git commits, generate a detailed Pull Request description in Markdown. Include a title, summary, and bullet points of changes.\n\nCommits:\n${log}`
+            agentMode = 'act'
+            trimmed = promptStr
+            break
+          }
+
+          case '/debug': {
+            const cmdToDebug = rest.join(' ').trim()
+            if (!cmdToDebug) {
+              console.log(chalk.yellow('\n  Usage: /debug <command>\n'))
+              break
+            }
+            console.log(chalk.cyan(`\n  ⟳ Starting auto-debugger for: ${chalk.white(cmdToDebug)}\n`))
+            const promptStr = `I want you to run the following command using your tools. If it fails, read the error, inspect the relevant files, fix the issue, and run the command again. Continue this loop until the command succeeds. Do not stop until it is fixed.\n\nCommand: ${cmdToDebug}`
+            agentMode = 'act'
+            trimmed = promptStr
             break
           }
 
@@ -338,17 +497,37 @@ async function runREPL(
           case '/help':
             console.log()
             console.log(renderDivider('help'))
-            console.log(`  ${chalk.cyan('/config')}          Switch mode or API key`)
+            console.log(chalk.bold('  ── Input ──────────────────────────────────────'))
+            console.log(`  ${chalk.cyan('eco › <message>')}    Type any message (single-line or paste multi-line)`)
+            console.log(`  ${chalk.cyan('/file <path>')}      Load a file as context, then add instruction`)
+            console.log()
+            console.log(chalk.bold('  ── Navigation ──────────────────────────────────'))
+            console.log(`  ${chalk.cyan('/cd <path>')}       Change working directory`)
+            console.log(`  ${chalk.cyan('/cd ..')}           Go up one directory`)
+            console.log(`  ${chalk.cyan('/cd')}              Go to home directory`)
+            console.log()
+            console.log(chalk.bold('  ── Conversation ────────────────────────────────'))
             console.log(`  ${chalk.cyan('/clear')}           Clear conversation context`)
             console.log(`  ${chalk.cyan('/history')}         Show message history`)
-            console.log(`  ${chalk.cyan('/tools')}           List available tools`)
-            console.log(`  ${chalk.cyan('/plan')}            Switch to plan mode (preview before execute)`)
-            console.log(`  ${chalk.cyan('/act')}             Switch to act mode (execute directly)`)
-            console.log(`  ${chalk.cyan('/swarm <goal>')}   Run multi-agent swarm`)
             console.log(`  ${chalk.cyan('/save [title]')}    Save current session`)
-            console.log(`  ${chalk.cyan('/sessions')}        List saved sessions`)
+            console.log(`  ${chalk.cyan('/sessions')}        Browse & resume saved sessions`)
+            console.log()
+            console.log(chalk.bold('  ── Modes ───────────────────────────────────────'))
+            console.log(`  ${chalk.cyan('/plan')}            Plan mode — agent explains before acting`)
+            console.log(`  ${chalk.cyan('/act')}             Act mode — agent executes directly (default)`)
+            console.log()
+            console.log(chalk.bold('  ── Tools & Automation ──────────────────────────'))
+            console.log(`  ${chalk.cyan('/tools')}           List all available tools (incl. file/folder/web)`)
+            console.log(`  ${chalk.cyan('/commit')}          Auto-generate git commit message (staged files)`)
+            console.log(`  ${chalk.cyan('/pr')}              Auto-generate Pull Request description`)
+            console.log(`  ${chalk.cyan('/debug <cmd>')}     Run command & auto-fix errors in a loop`)
+            console.log(`  ${chalk.cyan('/swarm <goal>')}    Launch multi-agent swarm`)
+            console.log()
+            console.log(chalk.bold('  ── Settings ────────────────────────────────────'))
+            console.log(`  ${chalk.cyan('/config')}          Switch provider or update API key`)
             console.log(`  ${chalk.cyan('/exit')}            Exit Eco Agent`)
             console.log(renderDivider())
+            console.log(chalk.gray('  Tip: Paste multi-line text directly — it is detected automatically.'))
             console.log()
             break
 
@@ -361,16 +540,21 @@ async function runREPL(
       // ── Run agent ──────────────────────────────────────────────────────────
       console.log()
 
+      // Inject current working directory into prompt so LLM resolves relative paths correctly
+      const cwdContext = `[System: Current working directory is ${process.cwd()}]\n\n`
+      const baseInput = cwdContext + trimmed
+
       // In plan mode, prepend instruction to think before acting
       const finalInput = agentMode === 'plan'
-        ? `Before doing anything, write a numbered step-by-step plan of what you will do to accomplish this task. Then ask me: "Shall I proceed? (yes/no)". Wait for my response before using any tools.\n\nTask: ${trimmed}`
-        : trimmed
+        ? `Before doing anything, write a numbered step-by-step plan of what you will do to accomplish this task. Then ask me: "Shall I proceed? (yes/no)". Wait for my response before using any tools.\n\nTask: ${baseInput}`
+        : baseInput
 
       const spinner = new Spinner('Thinking...')
       spinner.start()
 
       let responseBuffer = ''
       let firstContent = true
+      let streamedLines = 0 // track lines written during streaming
 
       await agent.run(finalInput, {
         onThinking: () => spinner.update('Thinking...'),
@@ -378,19 +562,49 @@ async function runREPL(
         onContent: (chunk) => {
           if (firstContent) {
             spinner.stop()
-            console.log(renderDivider('response'))
+            process.stdout.write(renderDivider('response') + '\n')
             firstContent = false
           }
           responseBuffer += chunk
+          // Count newlines for later cursor erasure
+          streamedLines += (chunk.match(/\n/g) || []).length
           process.stdout.write(chalk.white(chunk))
         },
 
         onToolCall: (toolName, args) => {
           spinner.stop()
-          console.log(renderToolCall(toolName, args))
+          if (toolName !== 'write_file') {
+            console.log(renderToolCall(toolName, args))
+          }
           spinner.update(`Running ${toolName}...`)
           spinner.start()
           firstContent = true
+        },
+
+        onConfirmTool: async (toolName, args) => {
+          if (!['write_file', 'delete_path', 'rename_path'].includes(toolName)) return true
+          
+          spinner.stop()
+          console.log(renderToolCall(toolName, args))
+          
+          if (toolName === 'write_file') {
+            const fs = await import('fs')
+            const path = args.path as string
+            const content = args.content as string
+            let oldContent = ''
+            if (fs.existsSync(path)) {
+              oldContent = fs.readFileSync(path, 'utf-8')
+            }
+            console.log(renderDiff(oldContent, content))
+          } else if (toolName === 'delete_path') {
+            console.log(chalk.red(`  ! WARNING: This will permanently delete: ${args.path}`))
+          } else if (toolName === 'rename_path') {
+            console.log(chalk.yellow(`  ~ This will rename/move: ${args.oldPath} -> ${args.newPath}`))
+          }
+          console.log()
+          
+          const ans = await new Promise<string>(resolve => rl.question(chalk.green('  Apply these changes? [Y/n] '), resolve))
+          return ans.trim().toLowerCase() !== 'n'
         },
 
         onToolResult: (_name, result, error) => {
@@ -413,20 +627,27 @@ async function runREPL(
         onDone: () => {
           spinner.stop()
           if (responseBuffer) {
-            // Re-render the full response as markdown
-            process.stdout.write('\r' + ' '.repeat(process.stdout.columns || 80) + '\r')
-            const rendered = renderMarkdown(responseBuffer)
-            console.log(rendered)
+            const termWidth = process.stdout.columns || 80
+            // Count actual display lines (accounting for word wrap)
+            const rawDisplayLines = responseBuffer.split('\n').reduce((acc, line) => {
+              return acc + Math.max(1, Math.ceil((line.length || 1) / termWidth))
+            }, 0)
+            // Erase: move cursor up past all streamed content + divider header
+            const totalLines = rawDisplayLines + 3
+            process.stdout.write(`\x1b[${totalLines}A\x1b[0J`)
+            // Re-render cleanly with full markdown + syntax highlighting
+            console.log(renderDivider('response'))
+            console.log(renderMarkdown(responseBuffer))
             console.log(renderDivider())
           }
           console.log()
           responseBuffer = ''
+          streamedLines = 0
           autoSave()
         }
       })
 
       prompt()
-    })
   }
 
   prompt()
@@ -491,8 +712,8 @@ program
       console.log(chalk.gray('  Use /config to switch to a tool-capable model.\n'))
     }
 
-    const config = buildEcoConfig(saved.mode, saved.apiKey, saved.model, systemPrompt)
-    const modelName = saved.model ?? 'llama-3.3-70b-versatile'
+    const config = buildEcoConfig(saved.mode, saved.apiKey, saved.model, systemPrompt, saved.baseUrl)
+    const modelName = saved.model ?? (saved.mode === 'ollama' ? 'llama3.2' : 'llama-3.3-70b-versatile')
     const promptText = promptParts.join(' ').trim()
 
     // Resolve --resume
@@ -835,7 +1056,7 @@ program
       console.log(chalk.yellow('  ⚠ Text-only mode — this model does not support tools.'))
       console.log(chalk.gray('  Use /config to switch to a tool-capable model.\n'))
     }
-    const config = buildEcoConfig(saved.mode, saved.apiKey, saved.model)
+    const config = buildEcoConfig(saved.mode, saved.apiKey, saved.model, undefined, saved.baseUrl)
     const provider = createProvider(config.provider)
 
     console.log()

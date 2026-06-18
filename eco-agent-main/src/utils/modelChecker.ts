@@ -96,7 +96,9 @@ export async function checkGroqModel(
       'gemma2-9b-it',
       'mixtral-8x7b-32768',
     ]
-    const supportsTools = groqToolModels.some(m => modelId.includes(m.split('-')[0]))
+    // Use proper matching: check if modelId exactly matches or ends with a known tool model
+    const supportsTools = groqToolModels.some(m => modelId === m || modelId.includes(m))
+
 
     return {
       id: model.id,

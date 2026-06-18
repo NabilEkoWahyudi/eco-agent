@@ -3,9 +3,10 @@ import chalk from 'chalk'
 import { checkOpenRouterModel, checkGroqModel, displayModelInfo } from './modelChecker.js'
 
 export interface SavedConfig {
-  mode: 'mock' | 'groq' | 'openrouter'
+  mode: 'mock' | 'groq' | 'openrouter' | 'ollama'
   apiKey?: string
   model?: string
+  baseUrl?: string
   supportsTools?: boolean
 }
 
@@ -96,7 +97,6 @@ async function enterModelId(
   rl: readline.Interface,
   mode: 'groq' | 'openrouter'
 ): Promise<string> {
-  const suggestions = mode === 'groq' ? GROQ_SUGGESTIONS : OPENROUTER_SUGGESTIONS
   const docsUrl = mode === 'groq'
     ? 'https://console.groq.com/docs/models'
     : 'https://openrouter.ai/models'
@@ -106,11 +106,6 @@ async function enterModelId(
   console.log()
   console.log(chalk.gray('  Type the exact model ID you want to use.'))
   console.log(chalk.gray('  Browse models at: ') + chalk.cyan(docsUrl))
-  console.log()
-  console.log(chalk.bold('  Suggestions:'))
-  suggestions.forEach(s => {
-    console.log(`    ${chalk.gray('·')} ${chalk.white(s)}`)
-  })
   console.log()
 
   let modelId = ''
@@ -127,10 +122,12 @@ async function enterModelId(
 
 async function enterApiKey(
   rl: readline.Interface,
-  prefix: string,
+  prefixes: string | string[],
   hint: string,
   url: string
 ): Promise<string> {
+  const validPrefixes = Array.isArray(prefixes) ? prefixes : [prefixes]
+
   console.log()
   console.log(divider('API Key'))
   console.log()
@@ -150,12 +147,17 @@ async function enterApiKey(
       continue
     }
 
-    if (!key.startsWith(prefix)) {
-      console.log(chalk.red(`  ✗ Invalid format. Key must start with "${prefix}"`))
+    const hasValidPrefix = validPrefixes.some(p => key.startsWith(p))
+    if (!hasValidPrefix) {
+      console.log(chalk.red(`  ✗ Invalid format. Key must start with "${validPrefixes[0]}"`)) 
       attempts++
       if (attempts >= 3) {
         console.log(chalk.yellow(`  ⚠  Still having trouble? Make sure you copied the full API key.`))
+        console.log(chalk.yellow(`  ⚠  Accepted prefixes: ${validPrefixes.join(', ')}.`))
+        // Allow bypass after 3 failed attempts in case of new key format
+        console.log(chalk.gray('  Press Enter to skip prefix check and proceed anyway.'))
       }
+      if (attempts >= 4) break // allow bypass after 4 attempts
       continue
     }
 
@@ -168,7 +170,7 @@ async function enterApiKey(
     break
   }
 
-  console.log(chalk.green(`  ✓ API key accepted (...${key.slice(-4)})`))
+  console.log(chalk.green(`  ✓ API key accepted (...${key.slice(-4)})`))  
   return key
 }
 
@@ -213,11 +215,15 @@ export async function runSetupWizard(isReconfigure = false): Promise<SavedConfig
     console.log(`      ${chalk.gray('Any model: Gemma, DeepSeek, GPT, Claude, Qwen, Llama...')}`)
     console.log(`      ${chalk.gray('Key format: sk-or-... · openrouter.ai')}`)
     console.log()
+    console.log(`  ${chalk.bgBlue.black(' 4 ')} ${chalk.bold('Ollama')}`)
+    console.log(`      ${chalk.gray('Local models — runs on your machine (no API key needed)')}`)
+    console.log(`      ${chalk.gray('Install at: ollama.com · Default: http://localhost:11434')}`)
+    console.log()
 
     let p = ''
-    while (!['1', '2', '3'].includes(p)) {
-      p = (await ask(rl, chalk.green('  Choose provider [1/2/3]: '))).trim()
-      if (!['1', '2', '3'].includes(p)) console.log(chalk.red('  ✗ Please enter 1, 2, or 3'))
+    while (!['1', '2', '3', '4'].includes(p)) {
+      p = (await ask(rl, chalk.green('  Choose provider [1/2/3/4]: '))).trim()
+      if (!['1', '2', '3', '4'].includes(p)) console.log(chalk.red('  ✗ Please enter 1, 2, 3, or 4'))
     }
 
     // Mock mode — no API key needed
@@ -240,10 +246,57 @@ export async function runSetupWizard(isReconfigure = false): Promise<SavedConfig
       return { mode: 'mock' }
     }
 
+    // ── Ollama: no API key, just base URL ───────────────────────────────────
+    if (p === '4') {
+      console.log()
+      console.log(chalk.bold('  Ollama — Local Model Setup'))
+      console.log()
+
+      const OLLAMA_SUGGESTIONS = [
+        'llama3.2',
+        'llama3.1:70b',
+        'mistral',
+        'gemma3',
+        'qwen2.5-coder',
+        'deepseek-r1',
+        'phi4',
+      ]
+      console.log(chalk.gray('  Make sure Ollama is running: ') + chalk.cyan('ollama serve'))
+      console.log(chalk.gray('  Pull a model first: ') + chalk.cyan('ollama pull llama3.2'))
+      console.log()
+      console.log(chalk.bold('  Suggestions:'))
+      OLLAMA_SUGGESTIONS.forEach(s => console.log(`    ${chalk.gray('·')} ${chalk.white(s)}`))
+      console.log()
+
+      let ollamaModel = ''
+      while (!ollamaModel.trim()) {
+        ollamaModel = (await ask(rl, chalk.green('  Model name (e.g. llama3.2): '))).trim()
+        if (!ollamaModel) console.log(chalk.red('  ✗ Model name cannot be empty'))
+      }
+
+      const defaultUrl = 'http://localhost:11434'
+      const urlInput = (await ask(rl, chalk.green(`  Ollama URL [${defaultUrl}]: `))).trim()
+      const ollamaUrl = urlInput || defaultUrl
+
+      rl.close()
+
+      console.log()
+      console.log(chalk.bold.green('  ══════════════════════════════════════════'))
+      console.log(chalk.green('  🌿 Setup complete! Eco Agent is ready.'))
+      console.log(chalk.gray(`     Provider : Ollama (local)`))
+      console.log(chalk.gray(`     Model    : ${ollamaModel}`))
+      console.log(chalk.gray(`     URL      : ${ollamaUrl}`))
+      console.log(chalk.bold.green('  ══════════════════════════════════════════'))
+      console.log()
+
+      return { mode: 'ollama', model: ollamaModel, baseUrl: ollamaUrl, supportsTools: true }
+    }
+
     const mode = p === '2' ? 'groq' : 'openrouter'
-    const keyPrefix = mode === 'groq' ? 'gsk_' : 'sk-or-'
-    const keyHint   = mode === 'groq' ? 'gsk_...' : 'sk-or-...'
-    const keyUrl    = mode === 'groq'
+    // OpenRouter supports both 'sk-or-' (legacy) and 'sk-or-v1-' (new format)
+    const keyPrefixes = mode === 'groq' ? ['gsk_'] : ['sk-or-v1-', 'sk-or-']
+    const keyHint     = mode === 'groq' ? 'gsk_...' : 'sk-or-... or sk-or-v1-...'
+    const keyUrl      = mode === 'groq'
       ? 'https://console.groq.com/keys'
       : 'https://openrouter.ai/keys'
 
@@ -251,8 +304,7 @@ export async function runSetupWizard(isReconfigure = false): Promise<SavedConfig
     const modelId = await enterModelId(rl, mode)
 
     // ── Step 3: Enter API key (same rl, muted output) ────────────────────────
-    // NOTE: rl is NOT closed here — this was the original bug
-    const apiKey = await enterApiKey(rl, keyPrefix, keyHint, keyUrl)
+    const apiKey = await enterApiKey(rl, keyPrefixes, keyHint, keyUrl)
 
     // ── Step 4: Verify model capabilities ────────────────────────────────────
     console.log()
@@ -287,6 +339,6 @@ export async function runSetupWizard(isReconfigure = false): Promise<SavedConfig
     console.log(chalk.bold.green('  ══════════════════════════════════════════'))
     console.log()
 
-    return { mode, apiKey, model: modelId, supportsTools }
+    return { mode, apiKey, model: modelId, supportsTools } as SavedConfig
   }
 }

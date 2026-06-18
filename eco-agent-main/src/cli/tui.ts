@@ -168,6 +168,8 @@ export class StatusBar {
   private sessionId?: string
   private msgCount = 0
   private pluginCount = 0
+  private tokens = 0
+  private cwd = process.cwd()
 
   constructor(mode: string, model: string, pluginCount = 0) {
     this.mode = mode
@@ -175,26 +177,36 @@ export class StatusBar {
     this.pluginCount = pluginCount
   }
 
-  update(opts: { sessionId?: string; msgCount?: number }) {
+  update(opts: { sessionId?: string; msgCount?: number; tokens?: number; cwd?: string }) {
     if (opts.sessionId !== undefined) this.sessionId = opts.sessionId
     if (opts.msgCount !== undefined) this.msgCount = opts.msgCount
+    if (opts.tokens !== undefined) this.tokens = opts.tokens
+    if (opts.cwd !== undefined) this.cwd = opts.cwd
   }
 
   render(): string {
     const termWidth = process.stdout.columns || 80
+    const home = process.env.HOME || process.env.USERPROFILE || ''
+    const shortCwd = this.cwd.startsWith(home)
+      ? '~' + this.cwd.slice(home.length)
+      : this.cwd
     const modeTag = this.mode === 'mock'
       ? chalk.bgYellow.black(' MOCK ')
       : this.mode === 'openrouter'
         ? chalk.bgMagenta.black(' OPENROUTER ')
-        : chalk.bgCyan.black(' GROQ ')
+        : this.mode === 'ollama'
+          ? chalk.bgBlue.black(' OLLAMA ')
+          : chalk.bgCyan.black(' GROQ ')
     const modelStr = chalk.gray(this.model)
+    const cwdStr = chalk.dim.yellow(shortCwd)
     const session = this.sessionId
       ? chalk.gray(`session:${this.sessionId.slice(0, 8)}`)
       : chalk.gray('no session')
     const msgs = chalk.gray(`${this.msgCount} msgs`)
+    const tks = this.tokens > 0 ? chalk.gray(` · ${this.tokens.toLocaleString()} tkns`) : ''
     const plugins = this.pluginCount > 0 ? chalk.gray(` · ${this.pluginCount} plugins`) : ''
-    const right = `${msgs} · ${session}${plugins}`
-    const left = ` ${modeTag} ${modelStr} `
+    const right = `${msgs}${tks} · ${session}${plugins}`
+    const left = ` ${modeTag} ${modelStr}  ${cwdStr} `
     const gap = Math.max(1, termWidth - left.replace(/\x1b\[[0-9;]*m/g, '').length - right.replace(/\x1b\[[0-9;]*m/g, '').length - 2)
     return chalk.bgBlack(left + ' '.repeat(gap) + right + ' ')
   }
@@ -235,3 +247,28 @@ export function renderDivider(label = ''): string {
   const line = '─'.repeat(Math.max(0, (width - label.length - 2) / 2))
   return chalk.gray(`  ${line} ${label} ${line}`)
 }
+
+// ─── Simple Diff Renderer ─────────────────────────────────────────────────────
+
+export function renderDiff(oldContent: string, newContent: string): string {
+  if (oldContent === newContent) return chalk.gray('  (No changes)')
+  
+  const oldLines = oldContent.split('\n')
+  const newLines = newContent.split('\n')
+  
+  const out: string[] = []
+  // Very basic diff just for previewing writes (could be improved with a real diff library)
+  // For now, we'll just show the new content if old is empty, or show a replaced message
+  if (!oldContent) {
+    out.push(chalk.green('  + New file contents:'))
+    newLines.slice(0, 10).forEach(l => out.push(chalk.green('  + ') + chalk.gray(l)))
+    if (newLines.length > 10) out.push(chalk.gray(`  ... and ${newLines.length - 10} more lines.`))
+  } else {
+    out.push(chalk.yellow('  ~ File will be overwritten. Preview of new contents:'))
+    newLines.slice(0, 10).forEach(l => out.push(chalk.yellow('  ~ ') + chalk.gray(l)))
+    if (newLines.length > 10) out.push(chalk.gray(`  ... and ${newLines.length - 10} more lines.`))
+  }
+  
+  return out.join('\n')
+}
+

@@ -53,13 +53,17 @@ eco-agent/
 |---------|-------------|
 | 🤖 **Agentic Loop** | Plan → Execute → Observe → Repeat automatically |
 | 🧠 **Multi-Provider** | Groq (free & fast), OpenRouter, Ollama (local), Mock (testing) |
-| 🛠️ **Tool Calling** | Read/write files, run shell commands, search code |
+| 🛠️ **Tool Calling** | Read/write/delete files & folders, run shell commands, search code, web search |
+| 🛡️ **Interactive Diffs** | Agent asks for confirmation `[Y/n]` before modifying or deleting any files |
+| ⚡ **Auto-Automation** | `/commit`, `/pr`, and `/debug` commands to auto-fix code and generate git messages |
+| 📋 **Smart Paste** | Just paste large context directly, auto-detects multi-line inputs without special commands |
+| 🪙 **Token Tracker** | Live token usage tracking for your API keys in the status bar |
 | 🗂️ **Project Context** | `eco init` makes the agent aware of your codebase |
 | 💾 **Session Memory** | Auto-saves conversations, resume anytime |
 | 🔌 **Plugin System** | Extend with npm packages |
 | 🔗 **MCP Support** | Connect to GitHub, Notion, Slack via Model Context Protocol |
 | 🐝 **Swarm Mode** | Run multi-agent tasks in parallel with `/swarm` |
-| 🖥️ **Rich TUI** | Spinner, syntax highlighting, status bar, markdown rendering |
+| 🖥️ **Rich TUI** | Spinner, syntax highlighted code, status bar with live CWD |
 
 ---
 
@@ -137,6 +141,11 @@ Inside the interactive session:
 |---------|-------------|
 | `/help` | Show all available commands |
 | `/config` | Switch provider or update API key |
+| `/cd <path>` | Change the current working directory |
+| `/file <path>`| Load a file directly as context |
+| `/commit` | Auto-generate commit message from staged changes |
+| `/pr` | Auto-generate Pull Request description |
+| `/debug <cmd>`| Run a command and let the agent auto-fix any errors in a loop |
 | `/plan` | Switch to **plan mode** — agent explains before acting |
 | `/act` | Switch to **act mode** — agent executes directly |
 | `/swarm <goal>` | Launch a **multi-agent swarm** for complex tasks |
@@ -146,6 +155,41 @@ Inside the interactive session:
 | `/history` | View message history |
 | `/tools` | List all available tools |
 | `/exit` | Exit Eco Agent |
+
+---
+
+## 🌟 Feature Examples
+
+### 1. Smart Paste (Long Context)
+Just paste your long text directly into the prompt. Eco Agent auto-detects multi-line inputs:
+```bash
+eco › [Ctrl+V paste your 100-line code here]
+      It will automatically wait for you to finish pasting!
+```
+
+### 2. Auto-Debugger
+Got an error building your project? Let Eco Agent fix it automatically:
+```bash
+eco › /debug npm run build
+  ⟳ Starting auto-debugger for: npm run build
+  # Agent will run it, read the TS errors, open the files, fix them, and retry until it succeeds!
+```
+
+### 3. Interactive File Diff & Approval
+Before Eco Agent writes, renames, or deletes a file, it will show you a visual diff and ask for permission, keeping your codebase safe:
+```bash
+  ~ File will be overwritten. Preview of new contents:
+  ~ + function hello() { ...
+  Apply these changes? [Y/n]
+```
+
+### 4. Auto Git Automation
+Stage your files with `git add .`, then type:
+```bash
+eco › /commit
+eco › /pr
+```
+Eco Agent will read your staged changes and generate perfect git messages automatically.
 
 ---
 

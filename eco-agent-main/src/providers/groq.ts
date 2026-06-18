@@ -120,6 +120,11 @@ export class GroqProvider {
         }
         finish_reason: string
       }>
+      usage?: {
+        prompt_tokens: number
+        completion_tokens: number
+        total_tokens: number
+      }
     }
 
     const choice = data.choices[0]
@@ -129,10 +134,17 @@ export class GroqProvider {
       arguments: JSON.parse(tc.function.arguments) as Record<string, unknown>
     }))
 
+    const usage = data.usage ? {
+      promptTokens: data.usage.prompt_tokens,
+      completionTokens: data.usage.completion_tokens,
+      totalTokens: data.usage.total_tokens
+    } : undefined
+
     return {
       content: choice.message.content ?? '',
       toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
-      finishReason: choice.finish_reason === 'tool_calls' ? 'tool_calls' : 'stop'
+      finishReason: choice.finish_reason === 'tool_calls' ? 'tool_calls' : 'stop',
+      usage
     }
   }
 

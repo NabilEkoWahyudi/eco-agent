@@ -10,6 +10,7 @@ Be concise, efficient, and always confirm before making destructive changes.`
 export class ContextManager {
   private messages: Message[] = []
   private config: EcoConfig
+  private totalTokens = 0
 
   constructor(config: EcoConfig) {
     this.config = config
@@ -53,6 +54,14 @@ export class ContextManager {
 
   messageCount(): number {
     return this.messages.length
+  }
+
+  addUsage(tokens: number): void {
+    this.totalTokens += tokens
+  }
+
+  getTotalTokens(): number {
+    return this.totalTokens
   }
 
   // Summarize old messages if context gets too long

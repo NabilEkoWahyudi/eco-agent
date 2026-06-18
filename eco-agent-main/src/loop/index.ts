@@ -7,6 +7,7 @@ export interface LoopOptions {
   onContent?: (chunk: string) => void
   onToolCall?: (tool: string, args: Record<string, unknown>) => void
   onToolResult?: (tool: string, result: string, error: boolean) => void
+  onConfirmTool?: (tool: string, args: Record<string, unknown>) => Promise<boolean>
   onDone?: (finalResponse: string) => void
   onError?: (error: Error) => void
 }
@@ -47,6 +48,10 @@ export class AgentLoop {
       }
 
       // If there's text content, stream it out
+      if (response.usage) {
+        this.context.addUsage(response.usage.totalTokens)
+      }
+
       if (response.content) {
         opts.onContent?.(response.content)
         finalResponse = response.content
@@ -92,6 +97,15 @@ export class AgentLoop {
 
     opts.onToolCall?.(toolCall.name, toolCall.arguments)
 
+    if (opts.onConfirmTool) {
+      const confirmed = await opts.onConfirmTool(toolCall.name, toolCall.arguments)
+      if (!confirmed) {
+        const msg = `User cancelled tool execution.`
+        opts.onToolResult?.(toolCall.name, msg, true)
+        return { output: msg, error: true }
+      }
+    }
+
     try {
       const result = await tool.execute(toolCall.arguments)
       const isError = result.toLowerCase().startsWith('error')
@@ -110,5 +124,9 @@ export class AgentLoop {
 
   getHistory() {
     return this.context.getHistory()
+  }
+
+  getTotalTokens() {
+    return this.context.getTotalTokens()
   }
 }

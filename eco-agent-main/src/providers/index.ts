@@ -17,7 +17,7 @@ export function createProvider(config: ProviderConfig): Provider {
     case 'openrouter':  return new OpenRouterProvider(config)
     case 'mock':        return new MockProvider()
     default:
-      throw new Error(`Provider "${config.type}" not supported.`)
+      throw new Error(`Provider "${config.type}" not supported. Supported: ollama, groq, openrouter, mock`)
   }
 }
 

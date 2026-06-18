@@ -106,6 +106,8 @@ export class OllamaProvider {
         }>
       }
       done_reason: string
+      prompt_eval_count?: number
+      eval_count?: number
     }
 
     const toolCalls = data.message.tool_calls?.map((tc, i) => ({
@@ -114,10 +116,17 @@ export class OllamaProvider {
       arguments: tc.function.arguments
     }))
 
+    const usage = data.prompt_eval_count !== undefined && data.eval_count !== undefined ? {
+      promptTokens: data.prompt_eval_count,
+      completionTokens: data.eval_count,
+      totalTokens: data.prompt_eval_count + data.eval_count
+    } : undefined
+
     return {
       content: data.message.content ?? '',
       toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
-      finishReason: toolCalls && toolCalls.length > 0 ? 'tool_calls' : 'stop'
+      finishReason: toolCalls && toolCalls.length > 0 ? 'tool_calls' : 'stop',
+      usage
     }
   }
 

@@ -23,10 +23,15 @@ export interface LLMResponse {
   content: string
   toolCalls?: ToolCall[]
   finishReason: 'stop' | 'tool_calls' | 'length' | 'error'
+  usage?: {
+    promptTokens: number
+    completionTokens: number
+    totalTokens: number
+  }
 }
 
 export interface ProviderConfig {
-  type: 'ollama' | 'groq' | 'openai' | 'anthropic'
+  type: 'ollama' | 'groq' | 'openrouter' | 'mock' | 'openai' | 'anthropic'
   model: string
   baseUrl?: string
   apiKey?: string

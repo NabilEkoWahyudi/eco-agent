@@ -29,14 +29,19 @@ eco
 
 ## Features
 
-- **Multi-provider** — Groq (free, fast), Ollama (local), more coming
-- **Tool calling** — read/write files, run shell commands, search code
+- **Multi-provider** — OpenRouter, Groq (free, fast), Ollama (local)
+- **Tool calling** — read/write/rename/delete files & folders, run shell commands, search code
+- **Web Search** — Built-in DuckDuckGo web search capability
 - **Agentic loop** — Plan → Execute → Observe → Repeat automatically
+- **Interactive Diffs** — Agent asks for confirmation `[Y/n]` before modifying or deleting any files
+- **Auto-Automation** — `/commit`, `/pr`, and `/debug` commands to auto-fix code and auto-generate git messages
+- **Multi-line Smart Paste** — Just paste large context directly, auto-detects multi-line inputs
+- **Token Tracker** — Live token usage tracking for your API keys
 - **Project context** — `eco init` makes the agent aware of your codebase
 - **Session memory** — auto-saves conversations, resume anytime
 - **Plugin system** — extend with npm packages
 - **MCP support** — connect to GitHub, Notion, Slack via Model Context Protocol
-- **TUI** — spinner, syntax highlighting, status bar, markdown rendering
+- **TUI** — syntax highlighted code, spinner, status bar with live CWD
 
 ## Quick Start
 
@@ -89,12 +94,51 @@ eco mcp remove <name>
 |---------|-------------|
 | `/help` | Show all commands |
 | `/config` | Switch provider or API key |
+| `/cd <path>` | Change the current working directory |
+| `/file <path>`| Load a file directly as context |
+| `/commit` | Auto-generate commit message from staged changes |
+| `/pr` | Auto-generate Pull Request description |
+| `/debug <cmd>`| Run a command and let the agent auto-fix any errors in a loop |
+| `/plan` | Switch to plan mode (agent asks permission before executing) |
+| `/act` | Switch to act mode (agent executes directly) |
 | `/save [title]` | Save current session |
-| `/sessions` | List saved sessions |
+| `/sessions` | Browse and resume saved sessions |
 | `/clear` | Clear conversation context |
 | `/history` | Show message history |
 | `/tools` | List available tools |
 | `/exit` | Exit Eco Agent |
+
+### Feature Examples
+
+**1. Smart Paste (Long Context)**
+Just paste your long text directly into the prompt. Eco Agent auto-detects multi-line inputs:
+```bash
+eco › [Ctrl+V paste your 100-line code here]
+      It will automatically wait for you to finish pasting!
+```
+
+**2. Auto-Debugger**
+Got an error building your project? Let Eco Agent fix it automatically:
+```bash
+eco › /debug npm run build
+  ⟳ Starting auto-debugger for: npm run build
+  # Agent will run it, read the TS errors, open the files, fix them, and retry until it succeeds!
+```
+
+**3. Interactive File Diff & Approval**
+Before Eco Agent writes, renames, or deletes a file, it will show you a visual diff and ask for permission, keeping your codebase safe:
+```bash
+  ~ File will be overwritten. Preview of new contents:
+  ~ + function hello() { ...
+  Apply these changes? [Y/n]
+```
+
+**4. Auto Git**
+Stage your files with `git add .`, then:
+```bash
+eco › /commit
+eco › /pr
+```
 
 ## Project Context (`eco init`)
 
@@ -167,19 +211,21 @@ eco plugin install my-eco-plugin
 
 ## Providers
 
-### Groq (Recommended — Free)
+### OpenRouter (Recommended)
+1. Sign up at [openrouter.ai](https://openrouter.ai)
+2. Create API key
+3. Run `eco` and select OpenRouter
+4. It supports thousands of models, including completely free models (`:free`)!
+
+### Groq (Ultra Fast)
 1. Sign up at [console.groq.com](https://console.groq.com)
 2. Create API key
 3. Run `eco` and select Groq when prompted
 
-Available models: `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `qwen-qwq-32b`, `gemma2-9b-it`, `mixtral-8x7b-32768`
-
-### Ollama (Local)
-```bash
-# Install Ollama: https://ollama.com
-ollama pull llama3.2
-eco   # select Mock for now, Ollama support coming soon
-```
+### Ollama (Local & Private)
+1. Install Ollama: https://ollama.com
+2. Pull a model: `ollama pull llama3.2`
+3. Run `eco`, select Ollama, and type `llama3.2` as the model. No API key needed.
 
 ## Project Structure
 
