@@ -3,7 +3,6 @@
 > **Lightweight, extensible agentic CLI — powered by local & cloud LLMs.**  
 > Plan → Execute → Observe → Repeat. Right in your terminal.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](eco-agent-main/LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![Provider: Groq](https://img.shields.io/badge/provider-Groq-orange)](https://console.groq.com)
 [![Provider: Ollama](https://img.shields.io/badge/provider-Ollama-blue)](https://ollama.com)
