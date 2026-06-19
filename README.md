@@ -328,14 +328,6 @@ npm run build:watch # Watch mode
 2. Create an API key
 3. Run `eco` and choose **Groq** when prompted
 
-Available models:
-
-- `llama-3.3-70b-versatile` ← default
-- `llama-3.1-8b-instant`
-- `qwen-qwq-32b`
-- `gemma2-9b-it`
-- `mixtral-8x7b-32768`
-
 ### OpenRouter
 
 1. Sign up at [openrouter.ai](https://openrouter.ai)
