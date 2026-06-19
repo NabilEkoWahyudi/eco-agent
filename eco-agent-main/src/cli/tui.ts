@@ -220,13 +220,27 @@ export class StatusBar {
 
 export function renderToolCall(toolName: string, args: Record<string, unknown>): string {
   const argsStr = JSON.stringify(args, null, 2)
-  const preview = argsStr.length > 120 ? argsStr.slice(0, 117) + '…' : argsStr
-  const lines = preview.split('\n')
-  const maxLen = Math.max(toolName.length + 4, ...lines.map(l => l.length))
-  const width = Math.min(maxLen + 4, 70)
+  const lines = argsStr.split('\n')
+  
+  // Ambil maksimal 5 baris pertama untuk preview
+  let displayLines = lines.slice(0, 5)
+  if (lines.length > 5) {
+    displayLines.push('  ...')
+  }
+
+  // Potong teks tiap baris agar tidak melebihi lebar maksimal box
+  const MAX_WIDTH = 70
+  displayLines = displayLines.map(l => {
+    // Kurangi space untuk border dan margin
+    const maxLineLen = MAX_WIDTH - 4 
+    return l.length > maxLineLen ? l.slice(0, maxLineLen - 3) + '...' : l
+  })
+
+  const maxLen = Math.max(toolName.length + 4, ...displayLines.map(l => l.length))
+  const width = Math.min(maxLen + 4, MAX_WIDTH)
 
   const top = chalk.yellow('  ╭─ ') + chalk.bold.yellow(`⚙ ${toolName}`) + chalk.yellow(' ' + '─'.repeat(Math.max(0, width - toolName.length - 5)) + '╮')
-  const body = lines.map(l => chalk.yellow('  │ ') + chalk.gray(l.padEnd(width - 4)) + chalk.yellow(' │')).join('\n')
+  const body = displayLines.map(l => chalk.yellow('  │ ') + chalk.gray(l.padEnd(width - 4)) + chalk.yellow(' │')).join('\n')
   const bottom = chalk.yellow('  ╰' + '─'.repeat(width) + '╯')
 
   return `\n${top}\n${body}\n${bottom}`

@@ -9,7 +9,7 @@ import type { EcoConfig, Tool } from '../utils/types.js'
 import { getSavedConfig, saveConfig, clearConfig } from '../utils/configStore.js'
 import { runSetupWizard } from '../utils/setupWizard.js'
 import { installPlugin, removePlugin, loadAllPlugins, listPlugins, getPluginsDir } from '../plugins/manager.js'
-import { saveSession, loadSession, listSessions, deleteSession, renameSession, formatRelativeTime } from '../session/manager.js'
+import { saveSession, loadSession, listSessions, deleteSession, renameSession, formatRelativeTime, buildSessionMemory, updateMemoryFile } from '../session/manager.js'
 import { Spinner, StatusBar, renderMarkdown, renderToolCall, renderToolResult, renderDivider, renderDiff } from './tui.js'
 import { listServers, addServer, removeServer } from '../mcp/registry.js'
 import { scanProject, saveProjectContext, loadProjectContext, loadCustomPrompt, buildSystemPromptWithContext, getEcoDir } from '../project/scanner.js'
@@ -77,11 +77,18 @@ async function runREPL(
 
   console.log(chalk.gray(`  Mode     : ${modeLabel}`))
   console.log(chalk.gray(`  Tools    : ${chalk.white(tools.map(t => t.name).join(', '))}`))
-  console.log(chalk.gray(`  Commands : ${chalk.white('/help  /plan  /act  /swarm  /save  /sessions  /config  /exit')}`))
+  console.log(chalk.gray(`  Commands : ${chalk.white('/help /plan /act /swarm /save /sessions /config /exit')}`))
+  console.log(chalk.gray(`             ${chalk.white('/tools /clear /history /cd /file /commit /pr /debug')}`))
   console.log()
 
+  // Load cross-session memory (last 3 sessions)
+  const sessionMemory = buildSessionMemory(resumeSessionId, 3)
+  if (sessionMemory) {
+    console.log(chalk.gray(`  Memory   : ${chalk.cyan('3 previous sessions loaded')}`))
+  }
+
   const provider = createProvider(config.provider)
-  const agent = new AgentLoop(provider, tools, config)
+  const agent = new AgentLoop(provider, tools, config, sessionMemory)
 
   // Plan/Act mode — 'plan' shows thinking only, 'act' executes
   let agentMode: 'plan' | 'act' = 'act'
@@ -109,6 +116,8 @@ async function runREPL(
     const meta = saveSession(history, config.provider.type, config.provider.model, currentSessionId)
     if (!currentSessionId) currentSessionId = meta.id
     statusBar.update({ sessionId: currentSessionId, msgCount: history.length, tokens: agent.getTotalTokens() })
+    // Update memory file so future sessions can recall this one
+    updateMemoryFile()
   }
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true })
@@ -486,13 +495,23 @@ async function runREPL(
             agentMode = 'plan'
             console.log(chalk.yellow('\n  📋 Plan mode ON — agent will explain its plan before executing.'))
             console.log(chalk.gray('  Use /act to switch back to execute mode.\n'))
-            break
+            const planTask = rest.join(' ').trim()
+            if (!planTask) {
+              return prompt()
+            }
+            trimmed = planTask
+            break // Fall through to execution
 
           case '/act':
             agentMode = 'act'
             console.log(chalk.green('\n  ⚡ Act mode ON — agent will execute directly.'))
             console.log(chalk.gray('  Use /plan to switch to plan mode.\n'))
-            break
+            const actTask = rest.join(' ').trim()
+            if (!actTask) {
+              return prompt()
+            }
+            trimmed = actTask
+            break // Fall through to execution
 
           case '/help':
             console.log()
@@ -550,6 +569,15 @@ async function runREPL(
         : baseInput
 
       const spinner = new Spinner('Thinking...')
+
+      // Display user prompt before response
+      console.log(chalk.dim('  ┌─ you ') + chalk.dim('─'.repeat(Math.max(0, (process.stdout.columns || 80) - 10))))
+      trimmed.split('\n').forEach(line => {
+        console.log(chalk.dim('  │ ') + chalk.white(line))
+      })
+      console.log(chalk.dim('  └' + '─'.repeat(Math.max(0, (process.stdout.columns || 80) - 4))))
+      console.log()
+
       spinner.start()
 
       let responseBuffer = ''

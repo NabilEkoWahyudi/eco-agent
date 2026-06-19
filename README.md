@@ -70,6 +70,14 @@ eco-agent/
 
 ### 1. Install globally
 
+**Method A: Quick Install (Mac/Linux)**
+```bash
+cd eco-agent-main
+chmod +x install.sh
+./install.sh
+```
+
+**Method B: Manual Install**
 ```bash
 cd eco-agent-main
 npm install
@@ -327,6 +335,14 @@ npm run build:watch # Watch mode
 1. Sign up at [console.groq.com](https://console.groq.com)
 2. Create an API key
 3. Run `eco` and choose **Groq** when prompted
+
+Available models:
+
+- `llama-3.3-70b-versatile` ← default
+- `llama-3.1-8b-instant`
+- `qwen-qwq-32b`
+- `gemma2-9b-it`
+- `mixtral-8x7b-32768`
 
 ### OpenRouter
 

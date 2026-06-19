@@ -5,6 +5,7 @@ import type { Message } from '../utils/types.js'
 
 const ECO_DIR = join(homedir(), '.eco-agent')
 const SESSIONS_DIR = join(ECO_DIR, 'sessions')
+const MEMORY_FILE = join(ECO_DIR, 'memory.json')
 
 export interface SessionMeta {
   id: string
@@ -37,8 +38,12 @@ function sessionPath(id: string): string {
 function generateTitle(messages: Message[]): string {
   const firstUser = messages.find(m => m.role === 'user')
   if (!firstUser) return 'Untitled session'
-  const title = firstUser.content.replace(/\n/g, ' ').trim()
-  return title.length > 50 ? title.slice(0, 47) + '...' : title
+  // Strip [System: ...] CWD prefix that gets prepended to every message
+  const clean = firstUser.content
+    .replace(/\[System:[^\]]*\]\n*/g, '')
+    .replace(/\n/g, ' ')
+    .trim()
+  return clean.length > 50 ? clean.slice(0, 47) + '...' : (clean || 'Untitled session')
 }
 
 export function saveSession(
@@ -115,4 +120,95 @@ export function formatRelativeTime(isoDate: string): string {
   if (hours < 24) return `${hours}h ago`
   if (days < 7) return `${days}d ago`
   return new Date(isoDate).toLocaleDateString('en-US')
+}
+
+// ─── Cross-session Memory ─────────────────────────────────────────────────────
+
+export interface SessionMemoryEntry {
+  title: string
+  date: string
+  summary: string
+}
+
+/**
+ * Extracts a meaningful summary from a session's messages.
+ * Captures up to 2 full user-assistant exchanges to preserve context like
+ * personas, preferences, and task types the user established.
+ */
+function extractSessionSummary(session: Session): string {
+  const parts: string[] = []
+  const msgs = session.messages
+  let exchangeCount = 0
+  let i = 0
+
+  while (i < msgs.length && exchangeCount < 2) {
+    if (msgs[i].role === 'user') {
+      const cleanUser = msgs[i].content
+        .replace(/\[System:[^\]]*\]\n*/g, '')
+        .trim()
+        .slice(0, 120)
+      if (!cleanUser) { i++; continue }
+
+      // Find the next assistant reply
+      const nextAssistant = msgs.slice(i + 1).find(m => m.role === 'assistant')
+      const cleanAssistant = nextAssistant?.content.trim().slice(0, 120) ?? ''
+
+      parts.push(`User: "${cleanUser}${cleanUser.length >= 120 ? '...' : '"'}`)
+      if (cleanAssistant) {
+        parts.push(`Agent: "${cleanAssistant}${cleanAssistant.length >= 120 ? '...' : '"'}`)
+      }
+      exchangeCount++
+    }
+    i++
+  }
+
+  return parts.join(' | ')
+}
+
+/**
+ * Builds a memory block from the last N sessions to inject into the system prompt.
+ * Skips the current active session.
+ */
+export function buildSessionMemory(currentSessionId?: string, maxSessions = 3): string {
+  const sessions = listSessions()
+    .filter(s => s.id !== currentSessionId)
+    .slice(0, maxSessions)
+
+  if (sessions.length === 0) return ''
+
+  const entries: string[] = sessions.map(meta => {
+    const session = loadSession(meta.id)
+    if (!session) return ''
+    const summary = extractSessionSummary(session)
+    const when = formatRelativeTime(meta.updatedAt)
+    return `- [${when}] "${meta.title}": ${summary}`
+  }).filter(Boolean)
+
+  if (entries.length === 0) return ''
+
+  return [
+    '\n\n--- Previous session context (for reference only) ---',
+    ...entries,
+    '--- End of previous context ---'
+  ].join('\n')
+}
+
+/**
+ * Save a compact memory snapshot of all sessions.
+ * Called after each session auto-save to keep memory file up to date.
+ */
+export function updateMemoryFile(): void {
+  ensureDirs()
+  const sessions = listSessions().slice(0, 5)
+  const entries: SessionMemoryEntry[] = sessions.map(meta => {
+    const session = loadSession(meta.id)
+    return {
+      title: meta.title,
+      date: meta.updatedAt,
+      summary: session ? extractSessionSummary(session) : ''
+    }
+  })
+  try {
+    writeFileSync(MEMORY_FILE, JSON.stringify(entries, null, 2), 'utf-8')
+  } catch { /* ignore */ }
 }

@@ -5,19 +5,28 @@ You have access to tools to read/write files, run shell commands, search codebas
 When given a task, think step by step and use tools as needed to complete it.
 Be concise, efficient, and always confirm before making destructive changes.`
 
-
+// Shorter system prompt for free/limited models to save tokens
+const LEAN_SYSTEM_PROMPT = `You are Eco Agent, a terminal AI assistant.
+Use your tools to complete tasks. Be concise and direct.
+Always confirm before deleting or overwriting files.`
 
 export class ContextManager {
   private messages: Message[] = []
   private config: EcoConfig
   private totalTokens = 0
+  private isFreeModel: boolean
+  private sessionMemory: string
 
-  constructor(config: EcoConfig) {
+  constructor(config: EcoConfig, sessionMemory = '') {
     this.config = config
+    this.isFreeModel = (config.provider.model ?? '').includes(':free')
+    this.sessionMemory = sessionMemory
   }
 
   getSystemPrompt(): string {
-    return this.config.systemPrompt ?? DEFAULT_SYSTEM_PROMPT
+    const base = this.config.systemPrompt
+      ?? (this.isFreeModel ? LEAN_SYSTEM_PROMPT : DEFAULT_SYSTEM_PROMPT)
+    return this.sessionMemory ? base + this.sessionMemory : base
   }
 
   addUserMessage(content: string): void {
@@ -64,12 +73,16 @@ export class ContextManager {
     return this.totalTokens
   }
 
-  // Summarize old messages if context gets too long
+  // Trim old messages if context gets too long.
+  // Free models use a tighter limit (20 msgs) to avoid hitting token limits.
   trimIfNeeded(maxMessages = 40): void {
-    if (this.messages.length <= maxMessages) return
-    // Keep first 4 (initial context) and last 30 (recent context)
-    const head = this.messages.slice(0, 4)
-    const tail = this.messages.slice(-30)
+    const limit = this.isFreeModel ? 20 : maxMessages
+    if (this.messages.length <= limit) return
+    // Keep first 2 (initial context) and last 16 for free, 30 for others
+    const headCount = this.isFreeModel ? 2 : 4
+    const tailCount = this.isFreeModel ? 16 : 30
+    const head = this.messages.slice(0, headCount)
+    const tail = this.messages.slice(-tailCount)
     const trimmed = this.messages.length - head.length - tail.length
     this.messages = [
       ...head,

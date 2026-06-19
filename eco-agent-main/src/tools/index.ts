@@ -29,7 +29,7 @@ export const readFileTool: Tool = {
 
 export const writeFileTool: Tool = {
   name: 'write_file',
-  description: 'Write content to a file. Creates the file if it does not exist.',
+  description: 'Write content to a file. Creates the file if it does not exist. After a successful write, the task is COMPLETE — do NOT call write_file again for the same file.',
   parameters: {
     path: { type: 'string', description: 'Path to write to', required: true },
     content: { type: 'string', description: 'Content to write', required: true }
@@ -46,7 +46,8 @@ export const writeFileTool: Tool = {
         mkdirSync(dirPath, { recursive: true })
       }
       writeFileSync(filePath, args.content as string, 'utf-8')
-      return `Successfully wrote to ${filePath}`
+      const lines = (args.content as string).split('\n').length
+      return `SUCCESS: File written to ${filePath} (${lines} lines). The file is saved and ready. Do NOT write to this file again unless the user asks for changes.`
     } catch (e) {
       return `Error writing file: ${(e as Error).message}`
     }

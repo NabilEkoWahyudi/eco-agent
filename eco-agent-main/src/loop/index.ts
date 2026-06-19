@@ -19,11 +19,11 @@ export class AgentLoop {
   private config: EcoConfig
   private maxIterations: number
 
-  constructor(provider: Provider, tools: Tool[], config: EcoConfig) {
+  constructor(provider: Provider, tools: Tool[], config: EcoConfig, sessionMemory = '') {
     this.provider = provider
     this.tools = tools
     this.config = config
-    this.context = new ContextManager(config)
+    this.context = new ContextManager(config, sessionMemory)
     this.maxIterations = config.maxIterations ?? 10
   }
 
@@ -33,6 +33,7 @@ export class AgentLoop {
 
     let iterations = 0
     let finalResponse = ''
+    const writtenFiles = new Set<string>() // Track files written in this run
 
     while (iterations < this.maxIterations) {
       iterations++
@@ -73,8 +74,24 @@ export class AgentLoop {
 
       // Execute all tool calls
       for (const toolCall of response.toolCalls) {
+        // Block duplicate writes to the same file in one run
+        if (toolCall.name === 'write_file' && toolCall.arguments.path) {
+          const filePath = String(toolCall.arguments.path)
+          if (writtenFiles.has(filePath)) {
+            const msg = `BLOCKED: File "${filePath}" was already written in this conversation turn. Do NOT write the same file again. The file is already saved. Respond to the user that the task is complete.`
+            this.context.addToolResult(toolCall.id, toolCall.name, msg)
+            opts.onToolResult?.(toolCall.name, msg, true)
+            continue
+          }
+        }
+
         const result = await this.executeToolCall(toolCall, opts)
         this.context.addToolResult(toolCall.id, toolCall.name, result.output)
+
+        // Track successful writes
+        if (toolCall.name === 'write_file' && !result.error && toolCall.arguments.path) {
+          writtenFiles.add(String(toolCall.arguments.path))
+        }
       }
     }
 
