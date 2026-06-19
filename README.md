@@ -10,10 +10,10 @@
 ```
 ███████╗ ██████╗ ██████╗      █████╗  ██████╗ ███████╗███╗   ██╗████████╗
 ██╔════╝██╔════╝██╔═══██╗    ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
-█████╗  ██║     ██║   ██║    ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   
-██╔══╝  ██║     ██║   ██║    ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   
-███████╗╚██████╗╚██████╔╝    ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   
-╚══════╝ ╚═════╝ ╚═════╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   
+█████╗  ██║     ██║   ██║    ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║
+██╔══╝  ██║     ██║   ██║    ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║
+███████╗╚██████╗╚██████╔╝    ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║
+╚══════╝ ╚═════╝ ╚═════╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝
                                                               v0.1.0
 ```
 
@@ -48,21 +48,21 @@ eco-agent/
 
 ## ✨ Features
 
-| Feature | Description |
-|---------|-------------|
-| 🤖 **Agentic Loop** | Plan → Execute → Observe → Repeat automatically |
-| 🧠 **Multi-Provider** | Groq (free & fast), OpenRouter, Ollama (local), Mock (testing) |
-| 🛠️ **Tool Calling** | Read/write/delete files & folders, run shell commands, search code, web search |
-| 🛡️ **Interactive Diffs** | Agent asks for confirmation `[Y/n]` before modifying or deleting any files |
-| ⚡ **Auto-Automation** | `/commit`, `/pr`, and `/debug` commands to auto-fix code and generate git messages |
-| 📋 **Smart Paste** | Just paste large context directly, auto-detects multi-line inputs without special commands |
-| 🪙 **Token Tracker** | Live token usage tracking for your API keys in the status bar |
-| 🗂️ **Project Context** | `eco init` makes the agent aware of your codebase |
-| 💾 **Session Memory** | Auto-saves conversations, resume anytime |
-| 🔌 **Plugin System** | Extend with npm packages |
-| 🔗 **MCP Support** | Connect to GitHub, Notion, Slack via Model Context Protocol |
-| 🐝 **Swarm Mode** | Run multi-agent tasks in parallel with `/swarm` |
-| 🖥️ **Rich TUI** | Spinner, syntax highlighted code, status bar with live CWD |
+| Feature                  | Description                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------------ |
+| 🤖 **Agentic Loop**      | Plan → Execute → Observe → Repeat automatically                                            |
+| 🧠 **Multi-Provider**    | Groq (free & fast), OpenRouter, Ollama (local), Mock (testing)                             |
+| 🛠️ **Tool Calling**      | Read/write/delete files & folders, run shell commands, search code, web search             |
+| 🛡️ **Interactive Diffs** | Agent asks for confirmation `[Y/n]` before modifying or deleting any files                 |
+| ⚡ **Auto-Automation**   | `/commit`, `/pr`, and `/debug` commands to auto-fix code and generate git messages         |
+| 📋 **Smart Paste**       | Just paste large context directly, auto-detects multi-line inputs without special commands |
+| 🪙 **Token Tracker**     | Live token usage tracking for your API keys in the status bar                              |
+| 🗂️ **Project Context**   | `eco init` makes the agent aware of your codebase                                          |
+| 💾 **Session Memory**    | Auto-saves conversations, resume anytime                                                   |
+| 🔌 **Plugin System**     | Extend with npm packages                                                                   |
+| 🔗 **MCP Support**       | Connect to GitHub, Notion, Slack via Model Context Protocol                                |
+| 🐝 **Swarm Mode**        | Run multi-agent tasks in parallel with `/swarm`                                            |
+| 🖥️ **Rich TUI**          | Spinner, syntax highlighted code, status bar with live CWD                                 |
 
 ---
 
@@ -77,6 +77,12 @@ npm run build
 npm install -g .
 ```
 
+To uninstall:
+
+```bash
+npm uninstall -g eco-agent
+```
+
 ### 2. Launch
 
 ```bash
@@ -87,12 +93,12 @@ On the first run, a **setup wizard** will guide you through choosing a provider 
 
 ### 3. Choose a provider
 
-| Provider | Speed | Cost | Requires |
-|----------|-------|------|----------|
-| **Groq** (recommended) | ⚡ Very fast | Free tier | API key from [console.groq.com](https://console.groq.com) |
-| **OpenRouter** | Fast | Free models available | API key from [openrouter.ai](https://openrouter.ai) |
-| **Ollama** | Local | Free | [ollama.com](https://ollama.com) running locally |
-| **Mock** | Instant | Free | Nothing — great for testing |
+| Provider               | Speed        | Cost                  | Requires                                                  |
+| ---------------------- | ------------ | --------------------- | --------------------------------------------------------- |
+| **Groq** (recommended) | ⚡ Very fast | Free tier             | API key from [console.groq.com](https://console.groq.com) |
+| **OpenRouter**         | Fast         | Free models available | API key from [openrouter.ai](https://openrouter.ai)       |
+| **Ollama**             | Local        | Free                  | [ollama.com](https://ollama.com) running locally          |
+| **Mock**               | Instant      | Free                  | Nothing — great for testing                               |
 
 ---
 
@@ -136,38 +142,42 @@ eco mcp remove <name>
 
 Inside the interactive session:
 
-| Command | Description |
-|---------|-------------|
-| `/help` | Show all available commands |
-| `/config` | Switch provider or update API key |
-| `/cd <path>` | Change the current working directory |
-| `/file <path>`| Load a file directly as context |
-| `/commit` | Auto-generate commit message from staged changes |
-| `/pr` | Auto-generate Pull Request description |
-| `/debug <cmd>`| Run a command and let the agent auto-fix any errors in a loop |
-| `/plan` | Switch to **plan mode** — agent explains before acting |
-| `/act` | Switch to **act mode** — agent executes directly |
-| `/swarm <goal>` | Launch a **multi-agent swarm** for complex tasks |
-| `/save [title]` | Save current conversation session |
-| `/sessions` | Browse and resume saved sessions |
-| `/clear` | Clear conversation context |
-| `/history` | View message history |
-| `/tools` | List all available tools |
-| `/exit` | Exit Eco Agent |
+| Command         | Description                                                   |
+| --------------- | ------------------------------------------------------------- |
+| `/help`         | Show all available commands                                   |
+| `/config`       | Switch provider or update API key                             |
+| `/cd <path>`    | Change the current working directory                          |
+| `/file <path>`  | Load a file directly as context                               |
+| `/commit`       | Auto-generate commit message from staged changes              |
+| `/pr`           | Auto-generate Pull Request description                        |
+| `/debug <cmd>`  | Run a command and let the agent auto-fix any errors in a loop |
+| `/plan`         | Switch to **plan mode** — agent explains before acting        |
+| `/act`          | Switch to **act mode** — agent executes directly              |
+| `/swarm <goal>` | Launch a **multi-agent swarm** for complex tasks              |
+| `/save [title]` | Save current conversation session                             |
+| `/sessions`     | Browse and resume saved sessions                              |
+| `/clear`        | Clear conversation context                                    |
+| `/history`      | View message history                                          |
+| `/tools`        | List all available tools                                      |
+| `/exit`         | Exit Eco Agent                                                |
 
 ---
 
 ## 🌟 Feature Examples
 
 ### 1. Smart Paste (Long Context)
+
 Just paste your long text directly into the prompt. Eco Agent auto-detects multi-line inputs:
+
 ```bash
 eco › [Ctrl+V paste your 100-line code here]
       It will automatically wait for you to finish pasting!
 ```
 
 ### 2. Auto-Debugger
+
 Got an error building your project? Let Eco Agent fix it automatically:
+
 ```bash
 eco › /debug npm run build
   ⟳ Starting auto-debugger for: npm run build
@@ -175,7 +185,9 @@ eco › /debug npm run build
 ```
 
 ### 3. Interactive File Diff & Approval
+
 Before Eco Agent writes, renames, or deletes a file, it will show you a visual diff and ask for permission, keeping your codebase safe:
+
 ```bash
   ~ File will be overwritten. Preview of new contents:
   ~ + function hello() { ...
@@ -183,11 +195,14 @@ Before Eco Agent writes, renames, or deletes a file, it will show you a visual d
 ```
 
 ### 4. Auto Git Automation
+
 Stage your files with `git add .`, then type:
+
 ```bash
 eco › /commit
 eco › /pr
 ```
+
 Eco Agent will read your staged changes and generate perfect git messages automatically.
 
 ---
@@ -201,6 +216,7 @@ eco › /swarm audit this codebase and fix all TypeScript errors
 ```
 
 Eco will:
+
 1. 📋 Plan a set of tasks with dependencies
 2. ✅ Show you the plan and ask for confirmation
 3. 🚀 Run up to 3 parallel worker agents
@@ -225,20 +241,22 @@ eco plugin install eco-plugin-websearch
 ```js
 // my-eco-plugin/index.js
 module.exports = {
-  name: 'my-plugin',
-  version: '1.0.0',
-  description: 'My custom tool',
-  tools: [{
-    name: 'my_tool',
-    description: 'Does something useful',
-    parameters: {
-      input: { type: 'string', description: 'Input value', required: true }
+  name: "my-plugin",
+  version: "1.0.0",
+  description: "My custom tool",
+  tools: [
+    {
+      name: "my_tool",
+      description: "Does something useful",
+      parameters: {
+        input: { type: "string", description: "Input value", required: true },
+      },
+      async execute(args) {
+        return `Result: ${args.input}`;
+      },
     },
-    async execute(args) {
-      return `Result: ${args.input}`
-    }
-  }]
-}
+  ],
+};
 ```
 
 ```bash
@@ -305,11 +323,13 @@ npm run build:watch # Watch mode
 ## 🌐 Providers Detail
 
 ### Groq (Recommended — Free)
+
 1. Sign up at [console.groq.com](https://console.groq.com)
 2. Create an API key
 3. Run `eco` and choose **Groq** when prompted
 
 Available models:
+
 - `llama-3.3-70b-versatile` ← default
 - `llama-3.1-8b-instant`
 - `qwen-qwq-32b`
@@ -317,11 +337,13 @@ Available models:
 - `mixtral-8x7b-32768`
 
 ### OpenRouter
+
 1. Sign up at [openrouter.ai](https://openrouter.ai)
 2. Many **free models** available (e.g. `meta-llama/llama-3.3-70b-instruct:free`)
 3. Run `eco` and choose **OpenRouter** when prompted
 
 ### Ollama (Local, No Internet)
+
 ```bash
 # Install Ollama: https://ollama.com
 ollama pull llama3.2
