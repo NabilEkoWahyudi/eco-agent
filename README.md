@@ -56,7 +56,6 @@ eco-agent/
 | 🛡️ **Interactive Diffs** | Agent asks for confirmation `[Y/n]` before modifying or deleting any files                 |
 | ⚡ **Auto-Automation**   | `/commit`, `/pr`, and `/debug` commands to auto-fix code and generate git messages         |
 | 📋 **Smart Paste**       | Just paste large context directly, auto-detects multi-line inputs without special commands |
-| 🪙 **Token Tracker**     | Live token usage tracking for your API keys in the status bar                              |
 | 🗂️ **Project Context**   | `eco init` makes the agent aware of your codebase                                          |
 | 💾 **Session Memory**    | Auto-saves conversations, resume anytime                                                   |
 | 🔌 **Plugin System**     | Extend with npm packages                                                                   |
