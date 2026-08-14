@@ -37,6 +37,7 @@ eco
 - **Auto-Automation** — `/commit`, `/pr`, and `/debug` commands to auto-fix code and auto-generate git messages
 - **Multi-line Smart Paste** — Just paste large context directly, auto-detects multi-line inputs
 - **Token Tracker** — Live token usage tracking for your API keys
+- **Ponytail Anti-Overengineering** — Native minimalist coding ruleset (`/ponytail`)
 - **Project context** — `eco init` makes the agent aware of your codebase
 - **Session memory** — auto-saves conversations, resume anytime
 - **Plugin system** — extend with npm packages
@@ -101,6 +102,8 @@ eco mcp remove <name>
 | `/debug <cmd>`  | Run a command and let the agent auto-fix any errors in a loop |
 | `/plan`         | Switch to plan mode (agent asks permission before executing)  |
 | `/act`          | Switch to act mode (agent executes directly)                  |
+| `/ponytail`     | Configure minimalist coding ruleset (anti-overengineering)    |
+| `/ponytail-audit`| Audit entire codebase for over-engineering (no bugs/perf)   |
 | `/save [title]` | Save current session                                          |
 | `/sessions`     | Browse and resume saved sessions                              |
 | `/clear`        | Clear conversation context                                    |
@@ -142,6 +145,16 @@ Stage your files with `git add .`, then:
 ```bash
 eco › /commit
 eco › /pr
+```
+
+**5. Ponytail (Anti-Overengineering)**
+Keep your codebase lean. Activate Ponytail ruleset to make the agent aggressively favor stdlib, existing code, and simplicity over writing new complex code.
+
+```bash
+eco › /ponytail          # Check current mode
+eco › /ponytail full     # Activate 7-step minimalist ladder
+eco › /ponytail-debt     # Find intentional technical debt markers
+eco › stop ponytail      # Instantly disable ruleset via natural language
 ```
 
 ## Project Context (`eco init`)
