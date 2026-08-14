@@ -1,4 +1,5 @@
-import type { Message, EcoConfig } from '../utils/types.js'
+import type { Message, EcoConfig, PonytailMode } from '../utils/types.js'
+import { getPonytailPrompt } from '../rulesets/ponytail.js'
 
 const DEFAULT_SYSTEM_PROMPT = `You are Eco Agent, a powerful agentic AI assistant running in the terminal.
 You have access to tools to read/write files, run shell commands, search codebases, and more.
@@ -16,17 +17,30 @@ export class ContextManager {
   private totalTokens = 0
   private isFreeModel: boolean
   private sessionMemory: string
+  private ponytailMode: PonytailMode
 
   constructor(config: EcoConfig, sessionMemory = '') {
     this.config = config
     this.isFreeModel = (config.provider.model ?? '').includes(':free')
     this.sessionMemory = sessionMemory
+    this.ponytailMode = config.ponytailMode ?? 'lite'
   }
 
   getSystemPrompt(): string {
     const base = this.config.systemPrompt
       ?? (this.isFreeModel ? LEAN_SYSTEM_PROMPT : DEFAULT_SYSTEM_PROMPT)
-    return this.sessionMemory ? base + this.sessionMemory : base
+    const ponytailSnippet = getPonytailPrompt(this.ponytailMode)
+    const withPonytail = ponytailSnippet ? base + '\n' + ponytailSnippet : base
+    return this.sessionMemory ? withPonytail + this.sessionMemory : withPonytail
+  }
+
+  /** Change the Ponytail mode mid-session without restarting the agent. */
+  setPonytailMode(mode: PonytailMode): void {
+    this.ponytailMode = mode
+  }
+
+  getPonytailMode(): PonytailMode {
+    return this.ponytailMode
   }
 
   addUserMessage(content: string): void {
@@ -91,3 +105,4 @@ export class ContextManager {
     ]
   }
 }
+

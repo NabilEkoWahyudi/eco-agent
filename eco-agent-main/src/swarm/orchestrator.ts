@@ -123,7 +123,7 @@ ${extraContext ? `\nContext from previous tasks:\n${extraContext}` : ''}
 Your task: ${task.description}`
 
     const workerConfig = {
-      provider: { type: 'groq' as const, model: 'llama-3.3-70b-versatile' },
+      provider: this.provider as unknown as import('../utils/types.js').ProviderConfig,
       maxIterations: 6,
       verbose: false,
       systemPrompt: workerSystemPrompt

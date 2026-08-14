@@ -1,5 +1,6 @@
 import type { Message, LLMResponse, ProviderConfig, Tool } from '../utils/types.js'
 import { RateLimiter } from '../utils/security.js'
+import { fetchWithRetry } from '../utils/fetchHelper.js'
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 
@@ -27,40 +28,6 @@ export class OpenRouterProvider {
     this.config = config
     this.apiKey = config.apiKey ?? process.env.OPENROUTER_API_KEY ?? ''
     if (!this.apiKey) throw new Error('OPENROUTER_API_KEY not set.')
-  }
-
-  private async fetchWithRetry(url: string, options: RequestInit, maxRetries = 5): Promise<Response> {
-    let retries = 0
-    let delayMs = 2000
-
-    while (true) {
-      const res = await fetch(url, options)
-
-      // If it's a rate limit (429) or server error (502, 503) and we have retries left
-      if ((res.status === 429 || res.status >= 500) && retries < maxRetries) {
-        retries++
-        
-        let errMsg = ''
-        try {
-          const clone = res.clone()
-          const errData = await clone.json() as any
-          errMsg = errData?.error?.message || res.statusText
-        } catch {
-          errMsg = res.statusText
-        }
-
-        const retryAfter = res.headers.get('Retry-After')
-        const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : delayMs
-
-        console.log(`\n  ⚠ OpenRouter: ${errMsg} (HTTP ${res.status}). Retrying in ${waitTime / 1000}s... (${retries}/${maxRetries})`)
-        await new Promise(r => setTimeout(r, waitTime))
-        
-        delayMs *= 2 // Exponential backoff
-        continue
-      }
-
-      return res
-    }
   }
 
   async complete(messages: Message[], tools: Tool[] = []): Promise<LLMResponse> {
@@ -104,7 +71,7 @@ export class OpenRouterProvider {
       body.tool_choice = 'auto'
     }
 
-    const res = await this.fetchWithRetry(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    const res = await fetchWithRetry(`${OPENROUTER_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -113,7 +80,7 @@ export class OpenRouterProvider {
         'X-Title': 'Eco Agent'
       },
       body: JSON.stringify(body)
-    })
+    }, { providerName: 'OpenRouter' })
 
     if (!res.ok) {
       let errMsg = `HTTP ${res.status}`
@@ -170,7 +137,7 @@ export class OpenRouterProvider {
   async *stream(messages: Message[]): AsyncGenerator<string> {
     const orMessages = messages.map(m => ({ role: m.role, content: m.content }))
 
-    const res = await this.fetchWithRetry(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    const res = await fetchWithRetry(`${OPENROUTER_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -184,7 +151,7 @@ export class OpenRouterProvider {
         temperature: this.config.temperature ?? 0.7,
         stream: true
       })
-    })
+    }, { providerName: 'OpenRouter' })
 
     if (!res.ok || !res.body) throw new Error('OpenRouter stream error')
 
@@ -212,9 +179,9 @@ export class OpenRouterProvider {
 
   async listModels(): Promise<Array<{ id: string; name: string }>> {
     try {
-      const res = await this.fetchWithRetry(`${OPENROUTER_BASE_URL}/models`, {
+      const res = await fetchWithRetry(`${OPENROUTER_BASE_URL}/models`, {
         headers: { 'Authorization': `Bearer ${this.apiKey}` }
-      }, 2)
+      }, { maxRetries: 2, providerName: 'OpenRouter' })
       const data = await res.json() as { data: Array<{ id: string; name: string }> }
       return data.data ?? []
     } catch {

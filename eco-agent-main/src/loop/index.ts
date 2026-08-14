@@ -1,4 +1,4 @@
-import type { EcoConfig, Tool, ToolCall } from '../utils/types.js'
+import type { EcoConfig, Tool, ToolCall, PonytailMode } from '../utils/types.js'
 import type { Provider } from '../providers/index.js'
 import { ContextManager } from '../context/index.js'
 
@@ -137,6 +137,15 @@ export class AgentLoop {
 
   resetContext(): void {
     this.context.clear()
+  }
+
+  /** Change Ponytail mode mid-session without restarting the agent. */
+  setPonytailMode(mode: PonytailMode): void {
+    this.context.setPonytailMode(mode)
+  }
+
+  getPonytailMode(): PonytailMode {
+    return this.context.getPonytailMode()
   }
 
   getHistory() {

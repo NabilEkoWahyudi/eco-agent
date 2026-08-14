@@ -99,7 +99,6 @@ export function renderMarkdown(text: string): string {
     if (line.trim() === '```' && inCodeBlock) {
       inCodeBlock = false
       const highlighted = highlightCode(codeLines.join('\n'), codeLang)
-      const border = chalk.gray('  ┌' + '─'.repeat(60) + '┐')
       const footer = chalk.gray('  └' + '─'.repeat(60) + '┘')
       const label = codeLang ? chalk.gray(` ${codeLang}`) : ''
       out.push(chalk.gray('  ┌─') + label + chalk.gray('─'.repeat(Math.max(0, 59 - codeLang.length)) + '┐'))
@@ -107,7 +106,6 @@ export function renderMarkdown(text: string): string {
         out.push(chalk.gray('  │ ') + l)
       })
       out.push(footer)
-      void border
       codeLines = []
       continue
     }
@@ -266,13 +264,10 @@ export function renderDivider(label = ''): string {
 
 export function renderDiff(oldContent: string, newContent: string): string {
   if (oldContent === newContent) return chalk.gray('  (No changes)')
-  
-  const oldLines = oldContent.split('\n')
+
   const newLines = newContent.split('\n')
-  
   const out: string[] = []
-  // Very basic diff just for previewing writes (could be improved with a real diff library)
-  // For now, we'll just show the new content if old is empty, or show a replaced message
+
   if (!oldContent) {
     out.push(chalk.green('  + New file contents:'))
     newLines.slice(0, 10).forEach(l => out.push(chalk.green('  + ') + chalk.gray(l)))
@@ -282,7 +277,8 @@ export function renderDiff(oldContent: string, newContent: string): string {
     newLines.slice(0, 10).forEach(l => out.push(chalk.yellow('  ~ ') + chalk.gray(l)))
     if (newLines.length > 10) out.push(chalk.gray(`  ... and ${newLines.length - 10} more lines.`))
   }
-  
+
   return out.join('\n')
 }
+
 

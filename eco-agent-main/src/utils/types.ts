@@ -1,3 +1,7 @@
+import type { PonytailMode } from '../rulesets/ponytail.js'
+
+export type { PonytailMode }
+
 export type Role = 'user' | 'assistant' | 'system' | 'tool'
 
 export interface Message {
@@ -44,6 +48,8 @@ export interface EcoConfig {
   systemPrompt?: string
   maxIterations?: number
   verbose?: boolean
+  /** Ponytail minimalist coding ruleset mode. Defaults to 'lite'. */
+  ponytailMode?: PonytailMode
 }
 
 export interface Tool {

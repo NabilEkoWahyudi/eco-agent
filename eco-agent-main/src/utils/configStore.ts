@@ -1,9 +1,18 @@
 import Conf from 'conf'
 import type { SavedConfig } from './setupWizard.js'
+import { parsePonytailMode } from '../rulesets/ponytail.js'
+import type { PonytailMode } from '../rulesets/ponytail.js'
 
 export type { SavedConfig }
 
-const store = new Conf<{ mode: string; apiKey: string; model: string; baseUrl: string; supportsTools: boolean }>({
+const store = new Conf<{
+  mode: string
+  apiKey: string
+  model: string
+  baseUrl: string
+  supportsTools: boolean
+  ponytailMode: string
+}>({
   projectName: 'eco-agent'
 })
 
@@ -34,3 +43,23 @@ export function clearConfig(): void {
 export function hasConfig(): boolean {
   return !!store.get('mode', '')
 }
+
+/**
+ * Resolve active Ponytail mode using priority chain:
+ *   1. PONYTAIL_DEFAULT_MODE env var (highest priority)
+ *   2. Persisted config value
+ *   3. 'lite' default
+ */
+export function getPonytailMode(): PonytailMode {
+  const envMode = process.env.PONYTAIL_DEFAULT_MODE
+  if (envMode) return parsePonytailMode(envMode)
+  const stored = store.get('ponytailMode', '')
+  if (stored) return parsePonytailMode(stored)
+  return 'lite'
+}
+
+/** Persist Ponytail mode to config store. */
+export function savePonytailMode(mode: PonytailMode): void {
+  store.set('ponytailMode', mode)
+}
+

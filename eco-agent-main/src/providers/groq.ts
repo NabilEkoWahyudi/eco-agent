@@ -1,5 +1,6 @@
 import type { Message, LLMResponse, ProviderConfig, Tool } from '../utils/types.js'
 import { RateLimiter } from '../utils/security.js'
+import { fetchWithRetry } from '../utils/fetchHelper.js'
 
 const GROQ_BASE_URL = 'https://api.groq.com/openai/v1'
 
@@ -12,39 +13,6 @@ export class GroqProvider {
     this.config = config
     this.apiKey = config.apiKey ?? process.env.GROQ_API_KEY ?? ''
     if (!this.apiKey) throw new Error('GROQ_API_KEY not set. Run: export GROQ_API_KEY=your_key')
-  }
-
-  private async fetchWithRetry(url: string, options: RequestInit, maxRetries = 5): Promise<Response> {
-    let retries = 0
-    let delayMs = 2000
-
-    while (true) {
-      const res = await fetch(url, options)
-
-      if ((res.status === 429 || res.status >= 500) && retries < maxRetries) {
-        retries++
-        
-        let errMsg = ''
-        try {
-          const clone = res.clone()
-          const errData = await clone.json() as any
-          errMsg = errData?.error?.message || res.statusText
-        } catch {
-          errMsg = res.statusText
-        }
-
-        const retryAfter = res.headers.get('Retry-After')
-        const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : delayMs
-
-        console.log(`\n  ⚠ Groq: ${errMsg} (HTTP ${res.status}). Retrying in ${waitTime / 1000}s... (${retries}/${maxRetries})`)
-        await new Promise(r => setTimeout(r, waitTime))
-        
-        delayMs *= 2
-        continue
-      }
-
-      return res
-    }
   }
 
   async complete(messages: Message[], tools: Tool[] = []): Promise<LLMResponse> {
@@ -91,14 +59,14 @@ export class GroqProvider {
       body.tool_choice = 'auto'
     }
 
-    const res = await this.fetchWithRetry(`${GROQ_BASE_URL}/chat/completions`, {
+    const res = await fetchWithRetry(`${GROQ_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`
       },
       body: JSON.stringify(body)
-    })
+    }, { providerName: 'Groq' })
 
     if (!res.ok) {
       let errMsg = res.statusText
@@ -151,7 +119,7 @@ export class GroqProvider {
   async *stream(messages: Message[]): AsyncGenerator<string> {
     const groqMessages = messages.map(m => ({ role: m.role, content: m.content }))
 
-    const res = await this.fetchWithRetry(`${GROQ_BASE_URL}/chat/completions`, {
+    const res = await fetchWithRetry(`${GROQ_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -163,7 +131,7 @@ export class GroqProvider {
         temperature: this.config.temperature ?? 0.7,
         stream: true
       })
-    })
+    }, { providerName: 'Groq' })
 
     if (!res.ok || !res.body) throw new Error('Groq stream error')
 

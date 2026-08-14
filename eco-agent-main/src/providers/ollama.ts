@@ -1,4 +1,5 @@
 import type { Message, LLMResponse, ProviderConfig, Tool } from '../utils/types.js'
+import { fetchWithRetry } from '../utils/fetchHelper.js'
 
 export class OllamaProvider {
   private config: ProviderConfig
@@ -7,44 +8,6 @@ export class OllamaProvider {
   constructor(config: ProviderConfig) {
     this.config = config
     this.baseUrl = config.baseUrl ?? 'http://localhost:11434'
-  }
-
-  private async fetchWithRetry(url: string, options: RequestInit, maxRetries = 5): Promise<Response> {
-    let retries = 0
-    let delayMs = 2000
-
-    while (true) {
-      const res = await fetch(url, options)
-
-      if ((res.status === 429 || res.status >= 500) && retries < maxRetries) {
-        retries++
-        
-        let errMsg = ''
-        try {
-          const clone = res.clone()
-          const errData = await clone.json() as any
-          errMsg = errData?.error?.message || res.statusText
-        } catch {
-          try {
-            const text = await res.clone().text()
-            errMsg = text || res.statusText
-          } catch {
-            errMsg = res.statusText
-          }
-        }
-
-        const retryAfter = res.headers.get('Retry-After')
-        const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : delayMs
-
-        console.log(`\n  ⚠ Ollama: ${errMsg} (HTTP ${res.status}). Retrying in ${waitTime / 1000}s... (${retries}/${maxRetries})`)
-        await new Promise(r => setTimeout(r, waitTime))
-        
-        delayMs *= 2
-        continue
-      }
-
-      return res
-    }
   }
 
   async complete(messages: Message[], tools: Tool[] = []): Promise<LLMResponse> {
@@ -84,11 +47,11 @@ export class OllamaProvider {
       body.tools = ollamaTools
     }
 
-    const res = await this.fetchWithRetry(`${this.baseUrl}/api/chat`, {
+    const res = await fetchWithRetry(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    })
+    }, { providerName: 'Ollama' })
 
     if (!res.ok) {
       let errMsg = res.statusText
@@ -133,7 +96,7 @@ export class OllamaProvider {
   async *stream(messages: Message[]): AsyncGenerator<string> {
     const ollamaMessages = messages.map(m => ({ role: m.role, content: m.content }))
 
-    const res = await this.fetchWithRetry(`${this.baseUrl}/api/chat`, {
+    const res = await fetchWithRetry(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -142,7 +105,7 @@ export class OllamaProvider {
         stream: true,
         options: { temperature: this.config.temperature ?? 0.7 }
       })
-    })
+    }, { providerName: 'Ollama' })
 
     if (!res.ok || !res.body) throw new Error('Ollama stream error')
 

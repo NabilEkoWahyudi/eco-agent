@@ -6,7 +6,7 @@ import { createProvider } from '../providers/index.js'
 import { AgentLoop } from '../loop/index.js'
 import { defaultTools } from '../tools/index.js'
 import type { EcoConfig, Tool } from '../utils/types.js'
-import { getSavedConfig, saveConfig, clearConfig } from '../utils/configStore.js'
+import { getSavedConfig, saveConfig, clearConfig, getPonytailMode, savePonytailMode } from '../utils/configStore.js'
 import { runSetupWizard } from '../utils/setupWizard.js'
 import { installPlugin, removePlugin, loadAllPlugins, listPlugins, getPluginsDir } from '../plugins/manager.js'
 import { saveSession, loadSession, listSessions, deleteSession, renameSession, formatRelativeTime, buildSessionMemory, updateMemoryFile } from '../session/manager.js'
@@ -18,6 +18,8 @@ import { SwarmOrchestrator } from '../swarm/orchestrator.js'
 import type { SwarmEvent } from '../swarm/orchestrator.js'
 import { loadMcpTools, disconnectAll } from '../mcp/client.js'
 import { pluginSafetyWarning } from '../utils/security.js'
+import { parsePonytailMode, buildReviewPrompt, buildAuditPrompt, PONYTAIL_TOKEN_COST, PONYTAIL_DEBT_REGEX } from '../rulesets/ponytail.js'
+import type { PonytailMode } from '../rulesets/ponytail.js'
 
 const VERSION = '0.1.0'
 
@@ -33,9 +35,9 @@ ${chalk.gray('                                                            v' + V
 
 function printBanner() { console.log(BANNER) }
 
-function buildEcoConfig(mode: string, apiKey?: string, model?: string, systemPrompt?: string, baseUrl?: string): EcoConfig {
+function buildEcoConfig(mode: string, apiKey?: string, model?: string, systemPrompt?: string, baseUrl?: string, ponytailMode?: PonytailMode): EcoConfig {
   if (mode === 'mock') {
-    return { provider: { type: 'mock' as never, model: 'mock' }, maxIterations: 10, verbose: false }
+    return { provider: { type: 'mock' as never, model: 'mock' }, maxIterations: 10, verbose: false, ponytailMode: ponytailMode ?? 'lite' }
   }
   const defaultModel = mode === 'openrouter'
     ? 'meta-llama/llama-3.3-70b-instruct:free'
@@ -51,7 +53,8 @@ function buildEcoConfig(mode: string, apiKey?: string, model?: string, systemPro
     },
     maxIterations: 10,
     verbose: false,
-    systemPrompt
+    systemPrompt,
+    ponytailMode: ponytailMode ?? 'lite'
   }
 }
 
@@ -78,7 +81,7 @@ async function runREPL(
   console.log(chalk.gray(`  Mode     : ${modeLabel}`))
   console.log(chalk.gray(`  Tools    : ${chalk.white(tools.map(t => t.name).join(', '))}`))
   console.log(chalk.gray(`  Commands : ${chalk.white('/help /plan /act /swarm /save /sessions /config /exit')}`))
-  console.log(chalk.gray(`             ${chalk.white('/tools /clear /history /cd /file /commit /pr /debug')}`))
+  console.log(chalk.gray(`             ${chalk.white('/tools /clear /history /cd /file /commit /pr /debug /ponytail')}`))
   console.log()
 
   // Load cross-session memory (last 3 sessions)
@@ -167,6 +170,14 @@ async function runREPL(
     let trimmed = input.trim()
     if (!trimmed) return prompt()
 
+    // Natural language Ponytail deactivation: detect full message "stop ponytail"
+    if (trimmed.toLowerCase() === 'stop ponytail') {
+      agent.setPonytailMode('off')
+      savePonytailMode('off')
+      console.log(chalk.gray('\n  Ponytail ruleset deactivated.\n'))
+      return prompt()
+    }
+
       if (trimmed.startsWith('/')) {
         const [cmd, ...rest] = trimmed.split(' ')
         switch (cmd) {
@@ -182,17 +193,20 @@ async function runREPL(
           case '/config':
             rl.close()
             console.log()
-            const newSaved = await runSetupWizard(true)
-            saveConfig(newSaved)
-            const reloadedPlugins = await loadAllPlugins()
-            await runREPL(
-              buildEcoConfig(newSaved.mode, newSaved.apiKey, newSaved.model, undefined, newSaved.baseUrl),
-              newSaved.mode,
-              newSaved.model ?? (newSaved.mode === 'ollama' ? 'llama3.2' : 'llama-3.3-70b-versatile'),
-              [...defaultTools, ...reloadedPlugins],
-              undefined,
-              reloadedPlugins.length
-            )
+            {
+              const newSaved = await runSetupWizard(true)
+              saveConfig(newSaved)
+              const reloadedPlugins = await loadAllPlugins()
+              const currentPonytail = agent.getPonytailMode()
+              await runREPL(
+                buildEcoConfig(newSaved.mode, newSaved.apiKey, newSaved.model, undefined, newSaved.baseUrl, currentPonytail),
+                newSaved.mode,
+                newSaved.model ?? (newSaved.mode === 'ollama' ? 'llama3.2' : 'llama-3.3-70b-versatile'),
+                [...defaultTools, ...reloadedPlugins],
+                undefined,
+                reloadedPlugins.length
+              )
+            }
             return
 
           case '/clear':
@@ -491,7 +505,7 @@ async function runREPL(
             break
           }
 
-          case '/plan':
+          case '/plan': {
             agentMode = 'plan'
             console.log(chalk.yellow('\n  📋 Plan mode ON — agent will explain its plan before executing.'))
             console.log(chalk.gray('  Use /act to switch back to execute mode.\n'))
@@ -501,8 +515,9 @@ async function runREPL(
             }
             trimmed = planTask
             break // Fall through to execution
+          }
 
-          case '/act':
+          case '/act': {
             agentMode = 'act'
             console.log(chalk.green('\n  ⚡ Act mode ON — agent will execute directly.'))
             console.log(chalk.gray('  Use /plan to switch to plan mode.\n'))
@@ -512,6 +527,122 @@ async function runREPL(
             }
             trimmed = actTask
             break // Fall through to execution
+          }
+
+          case '/ponytail': {
+            const modeArg = rest.join(' ').trim().toLowerCase()
+            if (!modeArg) {
+              // Show current mode
+              const currentMode = agent.getPonytailMode()
+              console.log()
+              console.log(renderDivider('ponytail'))
+              console.log(`  ${chalk.bold('Active mode:')} ${chalk.cyan(currentMode)} ${chalk.gray('(' + PONYTAIL_TOKEN_COST[currentMode] + ')')}`)
+              console.log()
+              console.log(`  ${chalk.gray('off')}    — ruleset disabled (+0 tokens)`)
+              console.log(`  ${currentMode === 'lite' ? chalk.cyan('lite') : chalk.gray('lite')}   — minimalist YAGNI check (~35 tokens/request)${currentMode === 'lite' ? chalk.green(' ← active') : ''}`)
+              console.log(`  ${currentMode === 'full' ? chalk.cyan('full') : chalk.gray('full')}   — 7-step ladder (~110 tokens/request)${currentMode === 'full' ? chalk.green(' ← active') : ''}`)
+              console.log(`  ${currentMode === 'ultra' ? chalk.cyan('ultra') : chalk.gray('ultra')}  — ladder + active dead-code hunt (~140 tokens/request)${currentMode === 'ultra' ? chalk.green(' ← active') : ''}`)
+              console.log()
+              console.log(chalk.gray('  Usage: /ponytail <mode>   or type: stop ponytail'))
+              console.log(renderDivider())
+              console.log()
+            } else {
+              const newMode = parsePonytailMode(modeArg)
+              agent.setPonytailMode(newMode)
+              savePonytailMode(newMode)
+              if (newMode === 'off') {
+                console.log(chalk.gray(`\n  Ponytail disabled. No ruleset injected.\n`))
+              } else {
+                console.log(chalk.green(`\n  ✓ Ponytail mode set to: ${chalk.bold(newMode)} ${chalk.gray('(' + PONYTAIL_TOKEN_COST[newMode] + ')')}\n`))
+              }
+            }
+            break
+          }
+
+          case '/ponytail-review': {
+            let diffContent = ''
+            try {
+              const { execSync: execSyncLocal } = await import('child_process')
+              diffContent = execSyncLocal('git diff', { encoding: 'utf-8' })
+              if (!diffContent) diffContent = execSyncLocal('git diff --cached', { encoding: 'utf-8' })
+              if (!diffContent) {
+                console.log(chalk.yellow('\n  No changes in git diff to review.\n'))
+                break
+              }
+            } catch {
+              console.log(chalk.red('\n  ✗ Not a git repo or git not available.\n'))
+              break
+            }
+            console.log(chalk.cyan('\n  ⟳ Reviewing diff for over-engineering...\n'))
+            agentMode = 'act'
+            trimmed = buildReviewPrompt(diffContent)
+            break // fall through to agent.run
+          }
+
+          case '/ponytail-audit': {
+            console.log(chalk.cyan('\n  ⟳ Starting full codebase audit for over-engineering...\n'))
+            agentMode = 'act'
+            trimmed = buildAuditPrompt()
+            break // fall through to agent.run
+          }
+
+          case '/ponytail-debt': {
+            // Pure local grep — zero LLM cost
+            console.log()
+            console.log(renderDivider('ponytail debt ledger'))
+            const fsDebt = await import('fs')
+            const pathDebt = await import('path')
+            const rootDir = process.cwd()
+            const IGNORE_DEBT = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'coverage'])
+            const debtItems: Array<{ file: string; line: number; text: string; hasTrigger: boolean }> = []
+
+            function scanForDebt(dir: string): void {
+              let entries: string[]
+              try { entries = fsDebt.readdirSync(dir) } catch { return }
+              for (const entry of entries) {
+                if (IGNORE_DEBT.has(entry)) continue
+                const full = pathDebt.join(dir, entry)
+                let stat: ReturnType<typeof fsDebt.statSync>
+                try { stat = fsDebt.statSync(full) } catch { continue }
+                if (stat.isDirectory()) { scanForDebt(full); continue }
+                const ext = pathDebt.extname(entry)
+                if (!['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs'].includes(ext)) continue
+                let content = ''
+                try { content = fsDebt.readFileSync(full, 'utf-8') } catch { continue }
+                content.split('\n').forEach((lineText, idx) => {
+                  PONYTAIL_DEBT_REGEX.lastIndex = 0
+                  const match = PONYTAIL_DEBT_REGEX.exec(lineText)
+                  if (match) {
+                    const markerText = match[1].trim()
+                    debtItems.push({
+                      file: pathDebt.relative(rootDir, full),
+                      line: idx + 1,
+                      text: markerText,
+                      hasTrigger: markerText.includes(',')
+                    })
+                  }
+                })
+              }
+            }
+
+            scanForDebt(rootDir)
+
+            if (debtItems.length === 0) {
+              console.log(chalk.gray('  No ponytail debt markers found.'))
+            } else {
+              debtItems.forEach(item => {
+                const rel = chalk.cyan(`./${item.file}:${item.line}`)
+                const tag = item.hasTrigger ? '' : chalk.red(' [no-trigger]')
+                console.log(`  ${rel}:  ${chalk.gray('// ponytail: ')}${chalk.white(item.text)}${tag}`)
+              })
+              console.log()
+              const noTrigger = debtItems.filter(i => !i.hasTrigger).length
+              console.log(chalk.gray(`  ${debtItems.length} marker${debtItems.length !== 1 ? 's' : ''}, ${noTrigger} with no trigger.`))
+            }
+            console.log(renderDivider())
+            console.log()
+            break
+          }
 
           case '/help':
             console.log()
@@ -541,6 +672,14 @@ async function runREPL(
             console.log(`  ${chalk.cyan('/pr')}              Auto-generate Pull Request description`)
             console.log(`  ${chalk.cyan('/debug <cmd>')}     Run command & auto-fix errors in a loop`)
             console.log(`  ${chalk.cyan('/swarm <goal>')}    Launch multi-agent swarm`)
+            console.log()
+            console.log(chalk.bold('  ── Ponytail (anti-overengineering) ─────────────'))
+            console.log(`  ${chalk.cyan('/ponytail')}        Show active Ponytail mode`)
+            console.log(`  ${chalk.cyan('/ponytail <mode>')} Set mode: off | lite | full | ultra`)
+            console.log(`  ${chalk.cyan('/ponytail-review')} Review git diff for over-engineering`)
+            console.log(`  ${chalk.cyan('/ponytail-audit')} Audit full codebase for over-engineering`)
+            console.log(`  ${chalk.cyan('/ponytail-debt')}   Show // ponytail: debt markers (no LLM call)`)
+            console.log(`  ${chalk.cyan('stop ponytail')}    Deactivate Ponytail (natural phrase)`)
             console.log()
             console.log(chalk.bold('  ── Settings ────────────────────────────────────'))
             console.log(`  ${chalk.cyan('/config')}          Switch provider or update API key`)
@@ -582,7 +721,6 @@ async function runREPL(
 
       let responseBuffer = ''
       let firstContent = true
-      let streamedLines = 0 // track lines written during streaming
 
       await agent.run(finalInput, {
         onThinking: () => spinner.update('Thinking...'),
@@ -594,8 +732,6 @@ async function runREPL(
             firstContent = false
           }
           responseBuffer += chunk
-          // Count newlines for later cursor erasure
-          streamedLines += (chunk.match(/\n/g) || []).length
           process.stdout.write(chalk.white(chunk))
         },
 
@@ -670,7 +806,6 @@ async function runREPL(
           }
           console.log()
           responseBuffer = ''
-          streamedLines = 0
           autoSave()
         }
       })
@@ -740,7 +875,8 @@ program
       console.log(chalk.gray('  Use /config to switch to a tool-capable model.\n'))
     }
 
-    const config = buildEcoConfig(saved.mode, saved.apiKey, saved.model, systemPrompt, saved.baseUrl)
+    const activePonytailMode = getPonytailMode()
+    const config = buildEcoConfig(saved.mode, saved.apiKey, saved.model, systemPrompt, saved.baseUrl, activePonytailMode)
     const modelName = saved.model ?? (saved.mode === 'ollama' ? 'llama3.2' : 'llama-3.3-70b-versatile')
     const promptText = promptParts.join(' ').trim()
 
