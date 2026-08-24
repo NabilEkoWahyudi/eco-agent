@@ -18,7 +18,7 @@ export async function fetchWithRetry(
   options: RequestInit,
   retryOpts: RetryOptions = {}
 ): Promise<Response> {
-  const { maxRetries = 5, initialDelayMs = 2000, providerName = 'API' } = retryOpts
+  const { maxRetries = 3, initialDelayMs = 1000, providerName = 'API' } = retryOpts
 
   let retries = 0
   let delayMs = initialDelayMs

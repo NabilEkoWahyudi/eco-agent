@@ -55,7 +55,7 @@ export function getPonytailMode(): PonytailMode {
   if (envMode) return parsePonytailMode(envMode)
   const stored = store.get('ponytailMode', '')
   if (stored) return parsePonytailMode(stored)
-  return 'lite'
+  return 'full'
 }
 
 /** Persist Ponytail mode to config store. */

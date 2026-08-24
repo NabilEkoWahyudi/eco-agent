@@ -1,4 +1,4 @@
-import type { EcoConfig, Tool, ToolCall, PonytailMode } from '../utils/types.js'
+import type { EcoConfig, Tool, ToolCall, PonytailMode, Message } from '../utils/types.js'
 import type { Provider } from '../providers/index.js'
 import { ContextManager } from '../context/index.js'
 
@@ -27,7 +27,15 @@ export class AgentLoop {
     this.maxIterations = config.maxIterations ?? 10
   }
 
-  async run(userInput: string, opts: LoopOptions = {}): Promise<string> {
+  /**
+   * Run the agentic loop.
+   * @param userInput - The user message to process.
+   * @param opts - Lifecycle callbacks.
+   * @param toolsOverride - If provided, use these tools instead of the default ones.
+   *                        Pass [] to run without any tools (e.g. /commit, /pr).
+   */
+  async run(userInput: string, opts: LoopOptions = {}, toolsOverride?: Tool[]): Promise<string> {
+    const tools = toolsOverride !== undefined ? toolsOverride : this.tools
     this.context.addUserMessage(userInput)
     this.context.trimIfNeeded()
 
@@ -41,14 +49,14 @@ export class AgentLoop {
 
       let response
       try {
-        response = await this.provider.complete(this.context.getMessages(), this.tools)
+        response = await this.provider.complete(this.context.getMessages(), tools)
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e))
         opts.onError?.(err)
         return `Error: ${err.message}`
       }
 
-      // If there's text content, stream it out
+      // Track usage
       if (response.usage) {
         this.context.addUsage(response.usage.totalTokens)
       }
@@ -65,12 +73,8 @@ export class AgentLoop {
         return finalResponse
       }
 
-      // Add assistant message with tool call intent
-      this.context.addAssistantMessage(
-        response.content
-          ? `${response.content}\n[Using tools: ${response.toolCalls.map(t => t.name).join(', ')}]`
-          : `[Using tools: ${response.toolCalls.map(t => t.name).join(', ')}]`
-      )
+      // Add assistant message — content only, no redundant [Using tools: ...] annotation
+      this.context.addAssistantMessage(response.content)
 
       // Execute all tool calls
       for (const toolCall of response.toolCalls) {
@@ -137,6 +141,18 @@ export class AgentLoop {
 
   resetContext(): void {
     this.context.clear()
+  }
+
+  /**
+   * Load a conversation history into this agent's context.
+   * Used by session resume to restore previous messages without accessing private fields.
+   */
+  loadHistory(messages: Message[]): void {
+    for (const m of messages) {
+      if (m.role === 'user') this.context.addUserMessage(m.content)
+      else if (m.role === 'assistant') this.context.addAssistantMessage(m.content)
+      // tool messages are not restored — they are ephemeral within a turn
+    }
   }
 
   /** Change Ponytail mode mid-session without restarting the agent. */

@@ -48,7 +48,7 @@ export interface EcoConfig {
   systemPrompt?: string
   maxIterations?: number
   verbose?: boolean
-  /** Ponytail minimalist coding ruleset mode. Defaults to 'lite'. */
+  /** Ponytail minimalist coding ruleset mode. Defaults to 'full' (per upstream ponytail repo). */
   ponytailMode?: PonytailMode
 }
 

@@ -1,0 +1,3 @@
+# Benchmark results — git-tracked intentionally so runs can be shared.
+# Exclude only the tmp sandbox used by the agent during task execution.
+tmp-bench/

@@ -246,29 +246,99 @@ export const webSearchTool: Tool = {
     query: { type: 'string', description: 'Search query', required: true }
   },
   async execute(args) {
-    const query = encodeURIComponent(args.query as string)
+    const rawQuery = args.query as string
+
+    // ── Strategy 1: DDG Instant Answer API (JSON, no HTML parsing needed) ──
     try {
-      const res = await fetch(`https://html.duckduckgo.com/html/?q=${query}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+      const apiUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(rawQuery)}&format=json&no_html=1&skip_disambig=1`
+      const res = await fetch(apiUrl, {
+        headers: { 'User-Agent': 'eco-agent/0.1.0' },
+        signal: AbortSignal.timeout(8000)
+      })
+      if (res.ok) {
+        const data = await res.json() as {
+          AbstractText?: string
+          AbstractSource?: string
+          AbstractURL?: string
+          RelatedTopics?: Array<{ Text?: string; FirstURL?: string }>
+          Answer?: string
+          AnswerType?: string
+        }
+
+        const parts: string[] = []
+
+        // Direct answer (calculator, unit converter, etc.)
+        if (data.Answer) {
+          parts.push(`Answer: ${data.Answer}`)
+        }
+
+        // Abstract (Wikipedia-style summary)
+        if (data.AbstractText) {
+          parts.push(`${data.AbstractText}${data.AbstractURL ? `\nSource: ${data.AbstractURL}` : ''}`)
+        }
+
+        // Related topics (up to 5)
+        if (data.RelatedTopics?.length) {
+          const topics = data.RelatedTopics
+            .filter(t => t.Text && t.FirstURL)
+            .slice(0, 5)
+            .map(t => `- ${t.Text}\n  ${t.FirstURL}`)
+          if (topics.length > 0) {
+            parts.push(`Related:\n${topics.join('\n\n')}`)
+          }
+        }
+
+        if (parts.length > 0) {
+          return `Search results for "${rawQuery}":\n\n${parts.join('\n\n')}`
+        }
+        // If API returns nothing useful, fall through to HTML scraping
+      }
+    } catch { /* fall through to HTML scraping */ }
+
+    // ── Strategy 2: DDG Lite HTML scraping (robust selectors) ──
+    try {
+      const htmlUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(rawQuery)}`
+      const res = await fetch(htmlUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0',
+          'Accept': 'text/html,application/xhtml+xml',
+          'Accept-Language': 'en-US,en;q=0.9'
+        },
+        signal: AbortSignal.timeout(10000)
       })
       if (!res.ok) return `Error searching the web: HTTP ${res.status}`
-      
+
       const html = await res.text()
       const results: string[] = []
-      
-      // Simple regex based HTML scraping for DDG Lite
-      const titleRegex = /<a class="result__url" href="[^"]+">([^<]+)<\/a>/g
-      const snippetRegex = /<a class="result__snippet[^>]+>(.*?)<\/a>/g
-      
-      let titleMatch, snippetMatch
-      let count = 0
-      while ((titleMatch = titleRegex.exec(html)) !== null && (snippetMatch = snippetRegex.exec(html)) !== null && count < 5) {
-        results.push(`- ${titleMatch[1].trim()}\n  ${snippetMatch[1].replace(/<[^>]+>/g, '').trim()}`)
-        count++
+
+      // DDG Lite HTML structure: result titles are in <a class="result__a"> or <h2><a>
+      // Snippets are in <a class="result__snippet"> or .result__snippet spans
+      // We use broad patterns to handle DDG layout variations
+      const resultBlocks = html.match(/<div[^>]+class="[^"]*result[^"]*"[^>]*>[\s\S]*?<\/div>\s*<\/div>/g) ?? []
+
+      for (const block of resultBlocks.slice(0, 6)) {
+        // Extract title
+        const titleMatch = block.match(/<a[^>]+class="[^"]*result__a[^"]*"[^>]*>([^<]+)<\/a>/) ??
+                           block.match(/<h2[^>]*>[\s\S]*?<a[^>]+>([^<]+)<\/a>/)
+        // Extract URL
+        const urlMatch = block.match(/href="([^"]+)"/) 
+        // Extract snippet — strip all tags
+        const snippetMatch = block.match(/class="[^"]*snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/) ??
+                             block.match(/class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\//)
+
+        const title = titleMatch?.[1]?.trim()
+        const snippet = snippetMatch?.[1]?.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+
+        if (title && snippet) {
+          const url = urlMatch?.[1] ? `\n  ${decodeURIComponent(urlMatch[1]).slice(0, 120)}` : ''
+          results.push(`- ${title}${url}\n  ${snippet}`)
+        }
       }
-      
-      if (results.length === 0) return `No results found for "${args.query}"`
-      return `Search results for "${args.query}":\n\n${results.join('\n\n')}`
+
+      if (results.length > 0) {
+        return `Search results for "${rawQuery}":\n\n${results.join('\n\n')}`
+      }
+      return `No results found for "${rawQuery}". Try rephrasing your search query.`
     } catch (e) {
       return `Error searching the web: ${(e as Error).message}`
     }

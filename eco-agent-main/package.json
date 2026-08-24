@@ -14,7 +14,9 @@
     "prepublishOnly": "npm run build",
     "install:global": "npm run build && npm install -g .",
     "uninstall:global": "npm uninstall -g eco-agent",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "benchmark:run": "tsx benchmarks/runner.ts",
+    "benchmark:compare": "tsx benchmarks/compare.ts"
   },
   "files": [
     "dist",

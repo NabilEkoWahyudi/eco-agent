@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="id" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="eco-agent adalah Agentic CLI TypeScript dengan loop Plan, Execute, Observe.">
+  <title>eco-agent · Agentic CLI untuk Developer Modern</title>
+  <script defer src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      --bg:#0a0f1a;--surface:#111827;--text:#e8edf5;--muted:#8b97a9;
+      --accent:#00d4aa;--accent-bg:rgba(0,212,170,.14);--border:#1e2a3e;
+      --mono:ui-monospace,SFMono-Regular,Consolas,monospace;
+      --sans:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      --radius:14px;--small-radius:8px;--max-width:1100px;
+      --ease:.3s cubic-bezier(.22,1,.36,1)
+    }
+
+    [data-theme=light] {
+      --bg:#f8fafc;--surface:#fff;--text:#0f172a;--muted:#475569;
+      --accent:#008f76;--accent-bg:rgba(0,143,118,.12);--border:#e2e8f0
+    }
+
+    *,*:before,*:after{box-sizing:border-box}
+    html{scroll-behavior:smooth;font-size:clamp(14px,1.2vw,16px)}
+    body{margin:0;background:var(--bg);color:var(--text);font:1rem/1.6 var(--sans);transition:background var(--ease),color var(--ease)}
+    a{color:inherit;text-decoration:none}
+    button{font:inherit;cursor:pointer}
+    .container{width:min(100% - 3rem,var(--max-width));margin:auto}
+    .muted,.section-header p,.feature p,.detail p,.step p,footer p{color:var(--muted)}
+    .code,code{font-family:var(--mono)}
+    .code{padding:.15em .45em;border-radius:4px;color:var(--accent);background:var(--accent-bg)}
+    h1,h2,h3{line-height:1.15;letter-spacing:-.02em}
+    h1{font-size:clamp(2.5rem,5vw,4rem);margin:0}
+    h2{font-size:clamp(1.8rem,3.5vw,2.5rem);margin:0 0 .75rem}
+    h3{font-size:1.2rem;margin:.75rem 0 .5rem}
+    .lead{max-width:62ch;margin:1rem auto;color:var(--muted);font-size:clamp(1.05rem,2vw,1.25rem)}
+
+    @keyframes fade-up{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:none}}
+    @keyframes blink{50%{opacity:0}}
+    @keyframes pulse{to{transform:scale(1.8);opacity:0}}
+    .reveal{opacity:0;transform:translateY(22px);transition:opacity .6s ease,transform .6s ease}
+    .reveal.visible{opacity:1;transform:none}
+
+    header{position:fixed;inset:0 0 auto;z-index:10;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--border)}
+    .nav{height:64px;display:flex;align-items:center;justify-content:space-between}
+    .logo{display:flex;align-items:center;gap:.5rem;font-weight:700;font-size:1.25rem}
+    .logo svg{width:28px;color:var(--accent)}
+    .nav-links{display:flex;gap:2rem;list-style:none;margin:0;color:var(--muted);font-size:.9rem}
+    .nav-links a:hover,.footer-links a:hover{color:var(--accent)}
+    .nav-actions{display:flex;align-items:center;gap:.75rem}
+    .btn,.theme-toggle,.menu-btn{border:1px solid var(--border);border-radius:var(--small-radius)}
+    .btn{display:inline-flex;align-items:center;gap:.5rem;padding:.65rem 1.1rem;font-size:.9rem;transition:transform .15s,background var(--ease),border-color var(--ease)}
+    .btn:hover{transform:translateY(-2px)}
+    .btn-primary{background:var(--accent);border-color:var(--accent);color:#031812}
+    .btn-ghost{background:transparent}
+    .btn-ghost:hover{border-color:var(--accent);color:var(--accent)}
+    .theme-toggle{width:40px;height:40px;display:grid;place-items:center;background:transparent;color:var(--muted)}
+    .theme-toggle:hover{color:var(--accent);border-color:var(--accent)}
+    .menu-btn{display:none;background:transparent;width:36px;height:36px;padding:7px}
+    .menu-btn span{display:block;height:2px;margin:4px 0;background:var(--text);transition:transform var(--ease),opacity var(--ease)}
+
+    #hero{min-height:100vh;display:grid;place-items:center;padding:8rem 0 4rem;text-align:center;background:radial-gradient(ellipse 80% 50% at 50% 0,var(--accent-bg),transparent 70%)}
+    .hero-content{max-width:850px}
+    .badge,.section-tag{display:inline-flex;align-items:center;gap:.45rem;border-radius:100px;background:var(--accent-bg);color:var(--accent);font-size:.78rem;font-weight:600}
+    .badge{padding:.4rem .9rem;margin-bottom:1.5rem}
+    .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:blink 1.5s infinite}
+    .hero-cta{display:flex;justify-content:center;gap:1rem;flex-wrap:wrap;margin:2rem 0}
+    .terminal{max-width:650px;margin:3rem auto 0;overflow:hidden;text-align:left;background:#0d1117;border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 18px 40px -20px #000;transform:perspective(1000px) rotateX(2deg)}
+    .terminal-bar,.code-header{display:flex;align-items:center;justify-content:space-between;padding:.75rem 1rem;background:#161d2a;border-bottom:1px solid var(--border)}
+    .dots{display:flex;gap:.35rem}.dots i{width:10px;height:10px;border-radius:50%;background:#ff5f57}.dots i:nth-child(2){background:#ffbd2e}.dots i:nth-child(3){background:#28ca42}
+    .terminal-body,pre{padding:1.4rem;font: .85rem/1.7 var(--mono);overflow:auto}
+    .prompt,.accent{color:var(--accent)}.terminal-output{color:#7dd3fc}
+    .typed{border-right:2px solid var(--accent);white-space:nowrap}
+
+    section{padding:5rem 0}
+    #features,#install{background:var(--surface);border-block:1px solid var(--border)}
+    .section-header{text-align:center;margin-bottom:3rem}
+    .section-tag{padding:.35rem .8rem;margin-bottom:1rem;text-transform:uppercase;letter-spacing:.1em}
+    .section-header p{max-width:55ch;margin:auto}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:1.25rem}
+    .card,.step{padding:1.6rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);transition:transform var(--ease),border-color var(--ease),box-shadow var(--ease)}
+    .card:hover,.step:hover{transform:translateY(-5px);border-color:var(--accent);box-shadow:0 15px 30px -22px var(--accent)}
+    .icon{width:46px;height:46px;display:grid;place-items:center;border-radius:12px;background:var(--accent-bg);color:var(--accent)}
+    .feature p,.detail p,.step p{font-size:.9rem;margin:0}
+    .loop{max-width:900px;margin:auto}
+    .loop-diagram{display:flex;align-items:center;justify-content:center;gap:1rem}
+    .node{text-align:center}.ring{width:78px;height:78px;display:grid;place-items:center;margin:auto;border:3px solid var(--border);border-radius:50%;background:var(--surface);color:var(--muted)}
+    .node.active .ring{border-color:var(--accent);color:var(--accent);box-shadow:0 0 0 5px var(--accent-bg)}
+    .arrow{width:70px;height:3px;background:linear-gradient(90deg,var(--border),var(--accent),var(--border))}
+    .details{margin-top:2.5rem}
+    .install-methods{display:flex;justify-content:center;gap:.75rem;flex-wrap:wrap;margin:2rem 0}
+    .method-tab{padding:.6rem 1rem;border:1px solid var(--border);border-radius:var(--small-radius);background:var(--bg);color:var(--muted)}
+    .method-tab.active,.method-tab:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-bg)}
+    .panel{display:none;max-width:700px;margin:auto}.panel.active{display:block}
+    .code-block{overflow:hidden;border:1px solid var(--border);border-radius:var(--radius);background:#0d1117}
+    .code-header{color:var(--muted);font-size:.75rem}
+    .copy-btn{padding:.3rem .6rem;border:0;border-radius:4px;background:var(--accent-bg);color:var(--accent);font-size:.75rem}
+    pre{margin:0;color:#e6edf3;white-space:pre-wrap}
+    .steps{margin-top:3rem}.step{text-align:center}.step-num{display:grid;place-items:center;width:34px;height:34px;margin:auto;border-radius:50%;background:var(--accent-bg);color:var(--accent);font-weight:700}
+
+    footer{padding:3rem 0;background:var(--surface);border-top:1px solid var(--border)}
+    .footer-grid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:2rem}
+    .footer-links ul{display:grid;gap:.5rem;list-style:none;padding:0;margin:0;color:var(--muted)}
+    .footer-bottom{display:flex;justify-content:space-between;gap:1rem;margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--border);font-size:.8rem}
+
+    @media(max-width:767px){
+      .nav-links{display:none;position:absolute;top:64px;left:0;right:0;flex-direction:column;align-items:center;padding:1.5rem;background:var(--surface);border-bottom:1px solid var(--border)}
+      .nav-links.open{display:flex}.menu-btn{display:block}.nav-actions .btn{display:none}
+      .loop-diagram{flex-direction:column}.arrow{width:3px;height:42px}.footer-grid,.footer-bottom{grid-template-columns:1fr;display:grid;text-align:center}
+      .footer-brand p{margin:auto}.footer-links ul{justify-items:center}
+    }
+    @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+  </style>
+</head>
+<body>
+  <header>
+    <nav class="container nav" aria-label="Navigasi utama">
+      <a class="logo" href="#hero" aria-label="eco-agent Home">
+        <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M16 2 4 16l12 14 12-14L16 2Zm0 2.5L25.5 16 16 29.5 6.5 16 16 4.5ZM16 10v12M10 16h12" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/></svg>
+        eco-agent
+      </a>
+      <ul class="nav-links" id="navLinks">
+        <li><a href="#features">Fitur</a></li><li><a href="#how-it-works">Cara Kerja</a></li><li><a href="#install">Install</a></li>
+      </ul>
+      <div class="nav-actions">
+        <button class="theme-toggle" id="themeToggle" aria-label="Ganti tema">☾</button>
+        <a class="btn btn-primary" href="https://github.com/NabilEkoWahyudi/eco-agent" target="_blank" rel="noopener">GitHub</a>
+        <button class="menu-btn" id="menuBtn" aria-expanded="false" aria-label="Buka menu"><span></span><span></span><span></span></button>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <section id="hero">
+      <div class="container hero-content">
+        <div class="badge"><span class="dot"></span> Open Source · GPL-3.0 · TypeScript</div>
+        <h1>Agentic CLI untuk <span class="accent">Developer Modern</span></h1>
+        <p class="lead">Loop <strong>Plan → Execute → Observe</strong>, multi-provider LLM, MCP, swarm mode, plugin system, session memory, dan auto-debugger dalam satu binary.</p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="#install">Mulai Sekarang</a>
+          <a class="btn btn-ghost" href="https://github.com/NabilEkoWahyudi/eco-agent" target="_blank" rel="noopener">Star di GitHub</a>
+        </div>
+        <div class="terminal" aria-label="Contoh terminal eco-agent">
+          <div class="terminal-bar"><div class="dots"><i></i><i></i><i></i></div><span class="muted">eco-agent v0.4.2</span></div>
+          <div class="terminal-body">
+            <div><span class="prompt">$</span> <span class="typed" id="typed"></span></div>
+            <div class="muted">[PLAN] Analyzing codebase...</div>
+            <div>[EXECUTE] Applying changes via MCP...</div>
+            <div class="accent">[OBSERVE] Tests passing · Lint clean</div>
+            <div class="terminal-output">Task completed in 3.2s. Session saved.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features">
+      <div class="container">
+        <div class="section-header reveal"><span class="section-tag">Fitur Utama</span><h2>Dibangun untuk Alur Kerja Agentic</h2><p>Automasi coding terstruktur langsung dari terminal.</p></div>
+        <div class="grid" id="featureGrid"></div>
+      </div>
+    </section>
+
+    <section id="how-it-works">
+      <div class="container loop">
+        <div class="section-header reveal"><span class="section-tag">Arsitektur</span><h2>Loop Otomatis yang Transparan</h2><p>Setiap task melewati siklus terstruktur dan dapat diverifikasi.</p></div>
+        <div class="loop-diagram reveal">
+          <div class="node active" data-phase="plan"><div class="ring">01</div><strong>PLAN</strong></div>
+          <div class="arrow"></div>
+          <div class="node" data-phase="execute"><div class="ring">02</div><strong>EXECUTE</strong></div>
+          <div class="arrow"></div>
+          <div class="node" data-phase="observe"><div class="ring">03</div><strong>OBSERVE</strong></div>
+        </div>
+        <div class="grid details">
+          <article class="card reveal"><div class="icon">◈</div><h3>Reasoning Engine</h3><p>Structured output untuk planning deterministik.</p></article>
+          <article class="card reveal"><div class="icon">▶</div><h3>Tool Execution</h3><p>Sandboxed execution melalui MCP server.</p></article>
+          <article class="card reveal"><div class="icon">✓</div><h3>Verification</h3><p>Auto-run test, lint, dan typecheck.</p></article>
+          <article class="card reveal"><div class="icon">⑂</div><h3>Git-Native</h3><p>Rollback instant dan PR-ready diff.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="install">
+      <div class="container">
+        <div class="section-header reveal"><span class="section-tag">Quick Start</span><h2>Siap Digunakan dalam Detik</h2><p>Konfigurasi lanjutan tersedia melalui <code class="code">~/.eco/config.json</code>.</p></div>
+        <div class="install-methods" role="tablist">
+          <button class="method-tab active" data-panel="npm" role="tab">npm / pnpm</button>
+          <button class="method-tab" data-panel="binary" role="tab">Binary</button>
+          <button class="method-tab" data-panel="docker" role="tab">Docker</button>
+          <button class="method-tab" data-panel="source" role="tab">Source</button>
+        </div>
+        <div class="panel active" id="panel-npm"><div class="code-block"><div class="code-header">Terminal<button class="copy-btn">Copy</button></div><pre>$ npm install -g eco-agent
+$ eco-agent "buat REST API todo list"</pre></div></div>
+        <div class="panel" id="panel-binary"><div class="code-block"><div class="code-header">Terminal<button class="copy-btn">Copy</button></div><pre>$ curl -fsSL https://eco-agent.dev/install.sh | bash
+$ eco-agent --version</pre></div></div>
+        <div class="panel" id="panel-docker"><div class="code-block"><div class="code-header">Terminal<button class="copy-btn">Copy</button></div><pre>$ docker run -it --rm -v "$(pwd):/workspace" ghcr.io/nabilekowahyudi/eco-agent:latest</pre></div></div>
+        <div class="panel" id="panel-source"><div class="code-block"><div class="code-header">Terminal<button class="copy-btn">Copy</button></div><pre>$ git clone https://github.com/NabilEkoWahyudi/eco-agent
+$ cd eco-agent && pnpm install && pnpm build</pre></div></div>
+        <div class="grid steps">
+          <article class="step reveal"><span class="step-num">1</span><h3>Install CLI</h3><p>Pilih metode instalasi.</p></article>
+          <article class="step reveal"><span class="step-num">2</span><h3>Konfigurasi Provider</h3><p>Atur provider dan API key.</p></article>
+          <article class="step reveal"><span class="step-num">3</span><h3>Jalankan Task</h3><p>Ketik perintah natural language.</p></article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container footer-grid">
+      <div><a class="logo" href="#hero">eco-agent</a><p>Agentic CLI open-source untuk automasi coding yang transparan dan ekstensibel.</p></div>
+      <nav class="footer-links"><h3>Navigasi</h3><ul><li><a href="https://github.com/NabilEkoWahyudi/eco-agent">Repository GitHub</a></li><li><a href="https://github.com/NabilEkoWahyudi/eco-agent/issues">Laporkan Issue</a></li><li><a href="#install">Quick Start</a></li></ul></nav>
+      <div><h3>Lisensi</h3><p>GPL-3.0-only</p><p>Node.js ≥ 20 / Bun ≥ 1.1</p></div>
+    </div>
+    <div class="container footer-bottom"><span>© 2024–2026 Nabil Eko Wahyudi</span><span>Built with TypeScript</span></div>
+  </footer>
+
+  <script>
+    (() => {
+      const $ = (selector, parent = document) => parent.querySelector(selector);
+      const $$ = (selector, parent = document) => [...parent.querySelectorAll(selector)];
+
+      const features = [
+        ['CPU','Multi-Provider LLM','Switch antar Groq, Ollama, dan OpenRouter tanpa mengubah kode.'],
+        ['↻','Loop Plan→Execute→Observe','Siklus otonom untuk merencanakan, mengeksekusi, dan memverifikasi task.'],
+        ['⚡','Integrasi MCP Native','Akses filesystem, Git, database, browser, dan custom MCP server.'],
+        ['◎','Swarm Mode','Jalankan beberapa agent paralel dengan role berbeda.'],
+        ['◇','Plugin System','Extend tools, hooks, formatter, dan komponen tanpa fork core.'],
+        ['▣','Session Memory','Persistent context antar-run menggunakan memory lokal.'],
+        ['⚙','Auto-Debugger','Deteksi error, usulkan perbaikan, dan apply patch otomatis.'],
+        ['TS','TypeScript First','Fully typed API dan strict configuration schema.']
+      ];
+
+      $('#featureGrid').innerHTML = features.map(([icon,title,description]) =>
+        `<article class="card reveal"><div class="icon">${icon}</div><h3>${title}</h3><p>${description}</p></article>`
+      ).join('');
+
+      const root = document.documentElement;
+      const themeButton = $('#themeToggle');
+      const storedTheme = localStorage.getItem('theme');
+      const preferredTheme = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      root.dataset.theme = storedTheme || preferredTheme;
+
+      const updateThemeButton = () => {
+        const light = root.dataset.theme === 'light';
+        themeButton.textContent = light ? '☀' : '☾';
+        themeButton.setAttribute('aria-label', light ? 'Gunakan tema gelap' : 'Gunakan tema terang');
+      };
+      updateThemeButton();
+
+      themeButton.addEventListener('click', () => {
+        root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+        localStorage.setItem('theme', root.dataset.theme);
+        updateThemeButton();
+      });
+
+      const menuButton = $('#menuBtn');
+      const navLinks = $('#navLinks');
+      menuButton.addEventListener('click', () => {
+        const open = navLinks.classList.toggle('open');
+        menuButton.setAttribute('aria-expanded', String(open));
+      });
+      $$('.nav-links a').forEach(link => link.addEventListener('click', () => {
+        navLinks.classList.remove('open');
+        menuButton.setAttribute('aria-expanded', 'false');
+      }));
+
+      const observer = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('visible');
+            observer.unobserve(entry.target);
+          }
+        });
+      }, { threshold: .1, rootMargin: '0px 0px -40px' });
+      $$('.reveal').forEach(element => observer.observe(element));
+
+      const typed = $('#typed');
+      const commands = [
+        'eco-agent run "refactor auth module"',
+        'eco-agent "buat test untuk user service"',
+        'eco-agent --swarm "optimalkan query DB"'
+      ];
+      let commandIndex = 0, characterIndex = 0, deleting = false;
+      const type = () => {
+        const command = commands[commandIndex];
+        typed.textContent = command.slice(0, characterIndex += deleting ? -1 : 1);
+        if (!deleting && characterIndex === command.length) {
+          deleting = true;
+          return setTimeout(type, 1400);
+        }
+        if (deleting && characterIndex === 0) {
+          deleting = false;
+          commandIndex = (commandIndex + 1) % commands.length;
+        }
+        setTimeout(type, deleting ? 28 : 55);
+      };
+      type();
+
+      const phases = $$('.node');
+      let phaseIndex = 0;
+      setInterval(() => {
+        phaseIndex = (phaseIndex + 1) % phases.length;
+        phases.forEach((node, index) => node.classList.toggle('active', index === phaseIndex));
+      }, 2200);
+
+      $$('.method-tab').forEach(tab => tab.addEventListener('click', () => {
+        $$('.method-tab').forEach(item => item.classList.toggle('active', item === tab));
+        $$('.panel').forEach(panel => panel.classList.toggle('active', panel.id === `panel-${tab.dataset.panel}`));
+      }));
+
+      $$('.copy-btn').forEach(button => button.addEventListener('click', async () => {
+        const code = $('pre', button.closest('.panel')).textContent;
+        try {
+          await navigator.clipboard.writeText(code);
+          button.textContent = 'Copied!';
+        } catch {
+          button.textContent = 'Gagal';
+        }
+        setTimeout(() => button.textContent = 'Copy', 1800);
+      }));
+
+      if (window.lucide) lucide.createIcons();
+    })();
+  </script>
+</body>
+</html>

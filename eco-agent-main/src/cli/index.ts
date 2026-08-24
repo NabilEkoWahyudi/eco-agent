@@ -37,7 +37,7 @@ function printBanner() { console.log(BANNER) }
 
 function buildEcoConfig(mode: string, apiKey?: string, model?: string, systemPrompt?: string, baseUrl?: string, ponytailMode?: PonytailMode): EcoConfig {
   if (mode === 'mock') {
-    return { provider: { type: 'mock' as never, model: 'mock' }, maxIterations: 10, verbose: false, ponytailMode: ponytailMode ?? 'lite' }
+    return { provider: { type: 'mock' as never, model: 'mock' }, maxIterations: 10, verbose: false, ponytailMode: ponytailMode ?? 'full' }
   }
   const defaultModel = mode === 'openrouter'
     ? 'meta-llama/llama-3.3-70b-instruct:free'
@@ -54,7 +54,7 @@ function buildEcoConfig(mode: string, apiKey?: string, model?: string, systemPro
     maxIterations: 10,
     verbose: false,
     systemPrompt,
-    ponytailMode: ponytailMode ?? 'lite'
+    ponytailMode: ponytailMode ?? 'full'
   }
 }
 
@@ -101,10 +101,8 @@ async function runREPL(
   if (resumeSessionId) {
     const session = loadSession(resumeSessionId)
     if (session) {
-      session.messages.forEach(m => {
-        if (m.role === 'user') agent['context'].addUserMessage(m.content)
-        else if (m.role === 'assistant') agent['context'].addAssistantMessage(m.content)
-      })
+      // Use public loadHistory() API — avoids private field access
+      agent.loadHistory(session.messages)
       statusBar.update({ sessionId: resumeSessionId, msgCount: session.meta.messageCount })
       console.log(chalk.gray(`  Session  : ${chalk.cyan(session.meta.title)}`))
       console.log(chalk.gray(`  Resumed  : ${chalk.white(session.meta.messageCount + ' messages')}`))
@@ -148,8 +146,8 @@ async function runREPL(
         if (done) return
         if (timer) clearTimeout(timer)
         lines.push(line)
-        // 50ms window: if more lines arrive within 50ms, they're part of a paste
-        timer = setTimeout(finish, 50)
+        // 400ms window: if more lines arrive within 400ms, they're part of a paste
+        timer = setTimeout(finish, 400)
       }
 
       rl.on('line', onLine)
@@ -349,10 +347,8 @@ async function runREPL(
               const loaded = loadSession(chosen.id)
               if (loaded) {
                 agent.resetContext()
-                loaded.messages.forEach(m => {
-                  if (m.role === 'user') agent['context'].addUserMessage(m.content)
-                  else if (m.role === 'assistant') agent['context'].addAssistantMessage(m.content)
-                })
+                // Use public loadHistory() API — avoids private field access
+                agent.loadHistory(loaded.messages)
                 currentSessionId = chosen.id
                 statusBar.update({ sessionId: chosen.id, msgCount: loaded.messages.length })
                 console.log(chalk.green(`\n  ✓ Resumed: ${chosen.title}\n`))
@@ -372,16 +368,33 @@ async function runREPL(
                 console.log(chalk.yellow('\n  No staged changes found. Please stage files with `git add` first.\n'))
                 break
               }
-            } catch (e) {
+            } catch {
               console.log(chalk.red('\n  ✗ Error reading git diff. Are you in a git repository?\n'))
               break
             }
-            
+
             console.log(chalk.cyan('\n  ⟳ Generating commit message...\n'))
-            const promptStr = `Based on the following git diff, generate a concise, descriptive commit message following Conventional Commits format. Output ONLY the commit message without quotes or extra text.\n\nDiff:\n${diff}`
-            agentMode = 'act' // Force execution
-            trimmed = promptStr
-            break // Fall through to agent.run
+            // Run WITHOUT tools — commit message generation needs no file/shell access
+            // This saves ~800-1200 tokens (tool definitions not sent to LLM)
+            const commitPrompt = `Based on the following git diff, generate a concise, descriptive commit message following Conventional Commits format. Output ONLY the commit message without quotes or extra text.\n\nDiff:\n${diff}`
+            const commitSpinner = new Spinner('Generating...')
+            commitSpinner.start()
+            const commitMsg = await agent.run(commitPrompt, {
+              onContent: (chunk) => process.stdout.write(chunk),
+              onDone: () => commitSpinner.stop(),
+              onError: (err) => { commitSpinner.stop(); console.log(chalk.red(`\n  ✗ ${err.message}`)) }
+            }, []) // empty tools array = no tool definitions sent
+            if (commitMsg && !commitMsg.startsWith('Error:')) {
+              console.log('\n')
+              const copy = await new Promise<string>(r => rl.question(chalk.green('  Copy to clipboard? [y/N] '), r))
+              if (copy.trim().toLowerCase() === 'y') {
+                try {
+                  child_process.execSync(`echo ${JSON.stringify(commitMsg.trim())} | clip`, { stdio: 'pipe' })
+                  console.log(chalk.green('  ✓ Copied to clipboard.\n'))
+                } catch { console.log(chalk.gray('  (clipboard not available)\n')) }
+              }
+            }
+            return prompt()
           }
 
           case '/pr': {
@@ -393,7 +406,7 @@ async function runREPL(
                 console.log(chalk.yellow('\n  No new commits found compared to origin/main.\n'))
                 break
               }
-            } catch (e) {
+            } catch {
               try {
                 log = child_process.execSync('git log -n 5 --oneline', { encoding: 'utf-8' })
               } catch {
@@ -401,12 +414,19 @@ async function runREPL(
                 break
               }
             }
-            
+
             console.log(chalk.cyan('\n  ⟳ Generating Pull Request description...\n'))
-            const promptStr = `Based on the following git commits, generate a detailed Pull Request description in Markdown. Include a title, summary, and bullet points of changes.\n\nCommits:\n${log}`
-            agentMode = 'act'
-            trimmed = promptStr
-            break
+            // Run WITHOUT tools — PR description generation needs no file/shell access
+            // This saves ~800-1200 tokens (tool definitions not sent to LLM)
+            const prPrompt = `Based on the following git commits, generate a detailed Pull Request description in Markdown. Include a title, summary, and bullet points of changes.\n\nCommits:\n${log}`
+            const prSpinner = new Spinner('Generating...')
+            prSpinner.start()
+            await agent.run(prPrompt, {
+              onContent: (chunk) => { prSpinner.stop(); process.stdout.write(chalk.white(chunk)) },
+              onDone: () => { prSpinner.stop(); console.log('\n') },
+              onError: (err) => { prSpinner.stop(); console.log(chalk.red(`\n  ✗ ${err.message}`)) }
+            }, []) // empty tools array = no tool definitions sent
+            return prompt()
           }
 
           case '/debug': {
@@ -464,7 +484,8 @@ async function runREPL(
             console.log()
             console.log(chalk.bold('  Running swarm...\n'))
 
-            const swarmOrch = new SwarmOrchestrator(swarmProvider, tools, { maxWorkers: 3 })
+            // Pass config so workers inherit ponytailMode + maxIterations
+            const swarmOrch = new SwarmOrchestrator(swarmProvider, tools, { maxWorkers: 3 }, config)
 
             swarmOrch.on('event', (evt: SwarmEvent) => {
               switch (evt.type) {
@@ -644,6 +665,51 @@ async function runREPL(
             break
           }
 
+          case '/ponytail-gain': {
+            // Status jujur: tampilkan scoreboard, atau pesan "belum diukur" bila tidak ada data
+            console.log()
+            console.log(renderDivider('ponytail gain'))
+            const gainPath = await import('path')
+            const fsGain = await import('fs')
+            const gainFile = gainPath.join(process.cwd(), '.eco', 'ponytail-gain.json')
+            if (fsGain.existsSync(gainFile)) {
+              try {
+                const raw = JSON.parse(fsGain.readFileSync(gainFile, 'utf-8'))
+                console.log(chalk.bold('  Benchmark results (ponytail-gain.json):'))
+                console.log()
+                if (raw.runs && Array.isArray(raw.runs)) {
+                  raw.runs.forEach((r: { label?: string; withPonytail?: Record<string, number>; withoutPonytail?: Record<string, number> }, i: number) => {
+                    console.log(`  ${chalk.cyan(String(i + 1) + '.')} ${chalk.bold(r.label ?? 'Run ' + (i + 1))}`)
+                    if (r.withPonytail)    console.log(`     ${chalk.green('with ponytail')}    : ${JSON.stringify(r.withPonytail)}`)
+                    if (r.withoutPonytail) console.log(`     ${chalk.red('without ponytail')}: ${JSON.stringify(r.withoutPonytail)}`)
+                    console.log()
+                  })
+                } else {
+                  console.log(chalk.gray('  ' + JSON.stringify(raw, null, 2).replace(/\n/g, '\n  ')))
+                }
+              } catch {
+                console.log(chalk.red('  ✗ Could not parse .eco/ponytail-gain.json'))
+              }
+            } else {
+              console.log(chalk.yellow('  ⚠ Status: belum diukur'))
+              console.log(chalk.gray('  No benchmark data found.'))
+              console.log()
+              console.log(chalk.gray('  To record gains, create .eco/ponytail-gain.json with structure:'))
+              console.log(chalk.gray('  {'))
+              console.log(chalk.gray('    "runs": ['))
+              console.log(chalk.gray('      {'))
+              console.log(chalk.gray('        "label": "feature-X on repo-Y",'))
+              console.log(chalk.gray('        "withPonytail":    { "loc": 120, "tokens": 800, "cost": 0.02, "timeSec": 45 },'))
+              console.log(chalk.gray('        "withoutPonytail": { "loc": 220, "tokens": 1500, "cost": 0.04, "timeSec": 70 }'))
+              console.log(chalk.gray('      }'))
+              console.log(chalk.gray('    ]'))
+              console.log(chalk.gray('  }'))
+            }
+            console.log(renderDivider())
+            console.log()
+            break
+          }
+
           case '/help':
             console.log()
             console.log(renderDivider('help'))
@@ -679,6 +745,7 @@ async function runREPL(
             console.log(`  ${chalk.cyan('/ponytail-review')} Review git diff for over-engineering`)
             console.log(`  ${chalk.cyan('/ponytail-audit')} Audit full codebase for over-engineering`)
             console.log(`  ${chalk.cyan('/ponytail-debt')}   Show // ponytail: debt markers (no LLM call)`)
+            console.log(`  ${chalk.cyan('/ponytail-gain')}   Show benchmark scoreboard (no LLM call)`)
             console.log(`  ${chalk.cyan('stop ponytail')}    Deactivate Ponytail (natural phrase)`)
             console.log()
             console.log(chalk.bold('  ── Settings ────────────────────────────────────'))
@@ -698,14 +765,12 @@ async function runREPL(
       // ── Run agent ──────────────────────────────────────────────────────────
       console.log()
 
-      // Inject current working directory into prompt so LLM resolves relative paths correctly
-      const cwdContext = `[System: Current working directory is ${process.cwd()}]\n\n`
-      const baseInput = cwdContext + trimmed
-
       // In plan mode, prepend instruction to think before acting
+      // Note: CWD is already in the system prompt (via project context or startup injection).
+      // We do NOT add it per-message to avoid wasting tokens on every turn.
       const finalInput = agentMode === 'plan'
-        ? `Before doing anything, write a numbered step-by-step plan of what you will do to accomplish this task. Then ask me: "Shall I proceed? (yes/no)". Wait for my response before using any tools.\n\nTask: ${baseInput}`
-        : baseInput
+        ? `Before doing anything, write a numbered step-by-step plan of what you will do to accomplish this task. Then ask me: "Shall I proceed? (yes/no)". Wait for my response before using any tools.\n\nTask: ${trimmed}`
+        : trimmed
 
       const spinner = new Spinner('Thinking...')
 
@@ -847,9 +912,10 @@ program
     const cwd = process.cwd()
     const projectCtx = loadProjectContext(cwd)
     const customPrompt = loadCustomPrompt(cwd)
+    // Inject CWD once into system prompt — not per-message (saves ~15 tokens/turn)
     const systemPrompt = projectCtx
       ? buildSystemPromptWithContext(projectCtx, customPrompt)
-      : undefined
+      : `You are Eco Agent, a powerful agentic AI assistant running in the terminal.\nCurrent working directory: ${cwd}\nUse tools to read/write files, run shell commands, search codebases, and more.\nBe concise, efficient, and always confirm before making destructive changes.`
 
     if (projectCtx) {
       console.log(chalk.gray(`  Project  : ${chalk.cyan(projectCtx.name)} ${chalk.gray('(' + projectCtx.type.join(', ') + ')')}`))

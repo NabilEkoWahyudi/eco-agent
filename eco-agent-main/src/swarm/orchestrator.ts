@@ -1,7 +1,7 @@
 import pLimit from 'p-limit'
 import EventEmitter from 'eventemitter3'
 import type { Provider } from '../providers/index.js'
-import type { Tool } from '../utils/types.js'
+import type { Tool, EcoConfig, PonytailMode } from '../utils/types.js'
 import { AgentLoop } from '../loop/index.js'
 import type { SwarmTask, SwarmPlan, SwarmResult, WorkerOptions } from './types.js'
 import { isReady, summarizeResults } from './planner.js'
@@ -19,12 +19,20 @@ export class SwarmOrchestrator extends EventEmitter<{ event: [SwarmEvent] }> {
   private provider: Provider
   private tools: Tool[]
   private options: WorkerOptions
+  /** Config passed from the parent session — used to build worker AgentLoop configs. */
+  private parentConfig: EcoConfig
 
-  constructor(provider: Provider, tools: Tool[], options: WorkerOptions = {}) {
+  constructor(provider: Provider, tools: Tool[], options: WorkerOptions = {}, parentConfig?: EcoConfig) {
     super()
     this.provider = provider
     this.tools = tools
     this.options = options
+    // Fallback config when called without parent config (e.g. from CLI swarm subcommand)
+    this.parentConfig = parentConfig ?? {
+      provider: { type: 'mock' as never, model: 'worker' },
+      maxIterations: 6,
+      ponytailMode: 'full'
+    }
   }
 
   async run(plan: SwarmPlan): Promise<SwarmResult> {
@@ -122,11 +130,14 @@ ${extraContext ? `\nContext from previous tasks:\n${extraContext}` : ''}
 
 Your task: ${task.description}`
 
-    const workerConfig = {
-      provider: this.provider as unknown as import('../utils/types.js').ProviderConfig,
-      maxIterations: 6,
+    // Inherit ponytailMode and cap maxIterations from parent config
+    const ponytailMode: PonytailMode = this.parentConfig.ponytailMode ?? 'full'
+    const workerConfig: EcoConfig = {
+      provider: this.parentConfig.provider,
+      maxIterations: Math.min(this.parentConfig.maxIterations ?? 10, 6),
       verbose: false,
-      systemPrompt: workerSystemPrompt
+      systemPrompt: workerSystemPrompt,
+      ponytailMode
     }
 
     const agent = new AgentLoop(this.provider, this.tools, workerConfig)
