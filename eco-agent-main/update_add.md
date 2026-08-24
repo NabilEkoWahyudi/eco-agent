@@ -45,3 +45,22 @@ Disusun berdasarkan pembacaan langsung source code kedua repository per Agustus 
 
 Ponytail: https://github.com/DietrichGebert/ponytail
 Eco Agent: https://github.com/NabilEkoWahyudi/eco-agent
+
+5. Penyelidikan Bug `web_search` & OpenRouter (Agustus 2026)
+Berdasarkan log pengujian terbaru, ditemukan dua masalah kritis terkait kegagalan `web_search` dan _crash_ aplikasi:
+
+**Bug 1: `web_search` gagal (fetch failed / timeout)**
+- **Gejala:** Muncul error `fetch failed` atau `The operation was aborted due to timeout`.
+- **Penyebab:** DuckDuckGo (baik Instant Answer API di `api.duckduckgo.com` maupun scraping di `html.duckduckgo.com`) telah meningkatkan perlindungan anti-bot mereka. Seringkali mereka menolak (block) atau membiarkan koneksi _hang_ (timeout) pada _request_ yang datang dari script Node.js (terutama dari IP datacenter atau karena TLS fingerprinting), meskipun sudah disematkan `User-Agent` palsu.
+- **Rekomendasi Solusi:** Mempertimbangkan pergantian provider pencarian yang lebih handal untuk _agentic tools_ (misal: SearxNG, Serper.dev, Tavily, atau Google Custom Search API), atau menambahkan mekanisme rotasi _User-Agent_ dan _proxy_ jika tetap ingin menggunakan DuckDuckGo.
+
+**Bug 2: Aplikasi _Crash_ `Cannot read properties of undefined (reading '0')`**
+- **Gejala:** Aplikasi terhenti total dengan error `TypeError` saat mencoba membaca array index `0`.
+- **Penyebab:** Pada file `src/providers/openrouter.ts` (baris 116), terdapat pemanggilan `const choice = data.choices[0]`. Jika model LLM (seperti model gratis/eksperimental `nvidia/nemotron-3-ultra-550b-a55b:free`) gagal menghasilkan respons yang valid (karena tidak _support_ fungsi tools, _overloaded_, atau error internal), objek `data.choices` yang dikembalikan dari OpenRouter mungkin kosong (`[]`) atau `undefined`. Karena tidak ada validasi _null-check_, program langsung _crash_.
+- **Rekomendasi Solusi:** Menambahkan pengecekan pengaman sebelum mengakses index array: 
+  ```typescript
+  if (!data.choices || data.choices.length === 0) {
+    throw new Error('OpenRouter: Model tidak mengembalikan jawaban (choices kosong/undefined).')
+  }
+  const choice = data.choices[0]
+  ```
