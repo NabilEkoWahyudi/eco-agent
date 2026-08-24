@@ -389,7 +389,14 @@ async function runREPL(
               const copy = await new Promise<string>(r => rl.question(chalk.green('  Copy to clipboard? [y/N] '), r))
               if (copy.trim().toLowerCase() === 'y') {
                 try {
-                  child_process.execSync(`echo ${JSON.stringify(commitMsg.trim())} | clip`, { stdio: 'pipe' })
+                  // Cross-platform clipboard support
+                  const platform = process.platform
+                  const cmd = platform === 'darwin'
+                    ? `echo ${JSON.stringify(commitMsg.trim())} | pbcopy`
+                    : platform === 'linux'
+                      ? `echo ${JSON.stringify(commitMsg.trim())} | xclip -selection clipboard 2>/dev/null || echo ${JSON.stringify(commitMsg.trim())} | xsel --clipboard --input 2>/dev/null`
+                      : `echo ${JSON.stringify(commitMsg.trim())} | clip` // Windows
+                  child_process.execSync(cmd, { stdio: 'pipe' })
                   console.log(chalk.green('  ✓ Copied to clipboard.\n'))
                 } catch { console.log(chalk.gray('  (clipboard not available)\n')) }
               }
