@@ -64,3 +64,12 @@ Berdasarkan log pengujian terbaru, ditemukan dua masalah kritis terkait kegagala
   }
   const choice = data.choices[0]
   ```
+
+**Bug 3: Eksekusi Tool Tanpa Validasi Parameter & Kesalahan Flagging Error**
+- **Gejala:** Saat LLM (terutama model berkapasitas rendah) berhalusinasi dan memanggil tool seperti `run_shell` dengan argumen kosong (`{}`), program tetap memaksakan eksekusinya dan error yang terjadi tidak ditandai dengan warna merah (`X`).
+- **Penyebab:** Ada dua kelemahan di kode internal Eco Agent:
+  1. **Kurangnya Validasi Parameter:** Di `src/tools/index.ts`, argumen tidak divalidasi. Pada `run_shell`, `args.command` langsung diteruskan ke `execSync()`. Jika argumen dari LLM kosong, `cmd` bernilai `undefined`, yang menyebabkan `execSync(undefined)` melempar `TypeError [ERR_INVALID_ARG_TYPE]`.
+  2. **Logika Flagging Error Kurang Akurat:** Pada `src/loop/index.ts`, status error ditentukan dari `result.toLowerCase().startsWith('error')`. Namun, `run_shell` mengembalikan pesan yang diawali dengan `"Command failed:"`. Akibatnya, sistem menganggap _crash_ tersebut sebagai "sukses", menampilkannya dengan tanda `✓` abu-abu, dan membuat LLM semakin kebingungan karena tidak menyadari bahwa perintahnya gagal.
+- **Rekomendasi Solusi:** 
+  - Validasi keberadaan parameter wajib (seperti `args.command`) di setiap awal blok eksekusi tool, dan segera kembalikan string `"Error: Missing required parameter 'command'"` jika tidak ada.
+  - Perbaiki logika `isError` di _agentic loop_, mungkin dengan menambahkan pengecekan `.includes('failed')` atau mengubah pesan kembalian dari tool menjadi berawalan `Error:`.
