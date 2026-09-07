@@ -339,7 +339,3 @@ benchmarks/
 ├── tasks/        4 sample benchmark tasks (real-world coding scenarios)
 └── results/      Per-run JSON results (git-tracked)
 ```
-
-## License
-
-MIT © Eco Agent Contributors
