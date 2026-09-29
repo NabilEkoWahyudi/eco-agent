@@ -3,7 +3,6 @@
 > Lightweight, extensible agentic CLI — powered by local & cloud LLMs.
 
 [![npm version](https://img.shields.io/npm/v/eco-agent.svg)](https://www.npmjs.com/package/eco-agent)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![Ponytail](https://img.shields.io/badge/ponytail-fidelity%20100%25-brightgreen)](benchmarks/README.md)
 
