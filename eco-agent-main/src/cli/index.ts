@@ -1189,6 +1189,11 @@ async function runREPL(
         if (err.message.includes('401') || err.message.includes('API')) {
           console.log(chalk.yellow('  → Type /config to update your API key.'))
         }
+        if (err.message.includes('429') || err.message.includes('rate limit') || err.message.includes('quota')) {
+          console.log(chalk.yellow('  → The provider quota is exhausted (free tier: requests/minute or tokens/minute).'))
+          console.log(chalk.yellow('  → Wait ~1 minute, run /clear to shrink the context, or switch provider with /config.'))
+          console.log(chalk.yellow('  → Current limits: AI Studio → Rate Limit page. Raise the client limit with ECO_RPM.'))
+        }
         firstContent = false
       },
 

@@ -1,5 +1,6 @@
 import type { Message, LLMResponse, ProviderConfig, Tool, ToolCall } from '../utils/types.js'
-import { RateLimiter } from '../utils/security.js'
+import { QuotaGovernor, rpmFromEnv } from '../utils/quota.js'
+import { printNotice } from '../utils/console.js'
 import { fetchWithRetry } from '../utils/fetchHelper.js'
 import { sseLines, parseSseData } from '../utils/sse.js'
 import type { ProviderStreamEvent } from './streamShared.js'
@@ -26,7 +27,21 @@ export class GeminiProvider {
   private config: ProviderConfig
   private apiKey: string
   private baseUrl: string
-  private rateLimiter = new RateLimiter(60, 60000) // 60 req/min
+  /**
+   * Quota governor.
+   *
+   * AI Studio enforces RPM / TPM / RPD per project. The old fixed limiter
+   * (60 req/min) fired far above the free-tier quota, which produced a lot
+   * of HTTP 429s (visible as a low success rate on the AI Studio dashboard)
+   * and long retry waits. The governor starts conservative, halves the rate
+   * whenever the provider answers 429 and recovers slowly afterwards.
+   * Override with ECO_RPM (e.g. 60 for a paid tier).
+   */
+  private quota = new QuotaGovernor({
+    rpm: rpmFromEnv(10),
+    minRpm: 2,
+    maxRpm: rpmFromEnv(10),
+  })
 
   constructor(config: ProviderConfig) {
     this.config = config
@@ -34,6 +49,37 @@ export class GeminiProvider {
     // Honor a custom baseUrl (proxy / tests)
     this.baseUrl = (config.baseUrl ?? GEMINI_BASE_URL).replace(/\/+$/, '')
     if (!this.apiKey) throw new Error('GEMINI_API_KEY not set. Get one free at aistudio.google.com. Run /config to configure it.')
+  }
+
+  /**
+   * Feed the quota governor with the provider's answer:
+   * 429 → halve our own rate, success → slowly recover.
+   */
+  private _onResponse(res: Response): void {
+    if (res.status === 429) {
+      this.quota.onRateLimited()
+    } else if (res.ok) {
+      this.quota.onSuccess()
+    }
+  }
+
+  /**
+   * Reserve a slot in the quota window.
+   * Returns the number of milliseconds the caller has to wait, or 0.
+   */
+  private async _reserveQuota(): Promise<number> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { allowed, waitMs } = this.quota.reserve()
+      if (allowed) return 0
+      // We would exceed the quota — wait locally instead of asking the
+      // provider and getting a 429 (which would also count as an error).
+      printNotice(
+        `\n  ! Gemini quota window full (${this.quota.rpm} req/min). ` +
+        `Waiting ${Math.ceil(waitMs / 1000)}s locally instead of hitting the API...`
+      )
+      await new Promise(r => setTimeout(r, waitMs))
+    }
+    return 0
   }
 
   /**
@@ -68,11 +114,8 @@ export class GeminiProvider {
   }
 
   async complete(messages: Message[], tools: Tool[] = []): Promise<LLMResponse> {
-    const rl = this.rateLimiter.check()
-    if (!rl.allowed) {
-      const waitSec = Math.ceil((rl.retryAfterMs ?? 5000) / 1000)
-      throw new Error(`Rate limit reached. Please wait ${waitSec}s.`)
-    }
+    // Stay inside the quota window locally (no 429 = no failed request)
+    await this._reserveQuota()
 
     const { contents, systemInstruction } = this._normalizeMessages(messages)
 
@@ -113,7 +156,7 @@ export class GeminiProvider {
       method: 'POST',
       headers,
       body: JSON.stringify(body)
-    }, { providerName: 'Gemini' })
+    }, { providerName: 'Gemini', onResponse: (r) => this._onResponse(r) })
 
     if (!res.ok) {
       let errMsg = `HTTP ${res.status}`
@@ -122,7 +165,10 @@ export class GeminiProvider {
         errMsg = err.error?.message ?? errMsg
       } catch { /* ignore */ }
 
-      if (res.status === 429) throw new Error('Gemini rate limit reached. Please wait a moment.')
+      if (res.status === 429) throw new Error(
+        'Gemini rate limit reached (HTTP 429). The free tier quota (requests per minute or tokens per minute) is exhausted — ' +
+        'wait about a minute, use /clear to shrink the context, or switch provider (/config).'
+      )
       if (res.status === 400) throw new Error(`Gemini bad request: ${errMsg}`)
       if (res.status === 403) throw new Error('Gemini: Invalid API Key or API not enabled. Check aistudio.google.com.')
       if (res.status === 503) throw new Error(`Gemini is temporarily overloaded (503): ${errMsg}\n  → This is a server-side queue at Google — try again in a minute, use a different model, or switch provider (/config).`)
@@ -208,6 +254,7 @@ export class GeminiProvider {
    * Function calls are collected and emitted as a `tool_calls` event.
    */
   async *streamWithTools(messages: Message[], tools: Tool[] = []): AsyncGenerator<ProviderStreamEvent> {
+    await this._reserveQuota()
     const { contents, systemInstruction } = this._normalizeMessages(messages)
 
     const body: Record<string, unknown> = {
@@ -242,7 +289,7 @@ export class GeminiProvider {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-    }, { providerName: 'Gemini' })
+    }, { providerName: 'Gemini', onResponse: (r) => this._onResponse(r) })
 
     if (!res.ok || !res.body) throw new Error('Gemini stream error')
 
@@ -341,6 +388,7 @@ export class GeminiProvider {
   }
 
   async *stream(messages: Message[]): AsyncGenerator<string> {
+    await this._reserveQuota()
     const { contents, systemInstruction } = this._normalizeMessages(messages)
 
     const body: Record<string, unknown> = {
@@ -362,7 +410,7 @@ export class GeminiProvider {
       method: 'POST',
       headers,
       body: JSON.stringify(body)
-    }, { providerName: 'Gemini' })
+    }, { providerName: 'Gemini', onResponse: (r) => this._onResponse(r) })
 
     if (!res.ok || !res.body) throw new Error('Gemini stream error')
 

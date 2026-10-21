@@ -9,6 +9,17 @@ export interface RetryOptions {
   initialDelayMs?: number
   /** Provider name shown in retry warning messages */
   providerName?: string
+  /**
+   * Called for every response the provider returns (before a retry).
+   * Used to feed the quota governor (429 = slow down, 200 = recover).
+   */
+  onResponse?: (res: Response) => void
+  /**
+   * Stop retrying after this many consecutive 429 responses.
+   * A repeated 429 means the quota is exhausted — retrying only makes the
+   * dashboard success rate worse and wastes the user's time.
+   */
+  maxConsecutive429?: number
 }
 
 /**
@@ -37,10 +48,11 @@ export async function fetchWithRetry(
   options: RequestInit,
   retryOpts: RetryOptions = {}
 ): Promise<Response> {
-  const { maxRetries = 3, initialDelayMs = 1000, providerName = 'API' } = retryOpts
+  const { maxRetries = 3, initialDelayMs = 1000, providerName = 'API', onResponse, maxConsecutive429 = 2 } = retryOpts
 
   let retries = 0
   let delayMs = initialDelayMs
+  let consecutive429 = 0
 
   while (true) {
     let res: Response
@@ -64,6 +76,26 @@ export async function fetchWithRetry(
       const enhanced = new Error(`${providerName}: Connection failed - ${detailed}`)
       ;(enhanced as unknown as { cause: unknown }).cause = err.cause
       throw enhanced
+    }
+
+    onResponse?.(res)
+
+    if (res.status === 429) consecutive429++
+    else consecutive429 = 0
+
+    // Quota exhausted (repeated 429): stop hammering the API
+    if (res.status === 429 && consecutive429 >= maxConsecutive429) {
+      let msg = 'rate limit exceeded'
+      try {
+        const data = await res.clone().json() as { error?: { message?: string } }
+        msg = data?.error?.message ?? msg
+      } catch { /* keep default */ }
+      printNotice(
+        `\n  ! ${providerName}: quota exhausted (HTTP 429 x${consecutive429}) — ${msg}` +
+        `\n    → The provider's free tier is rate limited. Eco Agent stopped retrying so it does not waste quota.` +
+        `\n    → Wait a minute, or switch provider (/config) for an instant, unthrottled answer.`
+      )
+      return res
     }
 
     if ((res.status === 429 || res.status >= 500) && retries < maxRetries) {
@@ -107,7 +139,9 @@ export async function fetchWithRetry(
       printNotice(
         `\n  ! ${providerName}: ${errMsg} (HTTP ${res.status}). ` +
         `Retrying in ${waitTime / 1000}s... (${retries}/${maxRetries})` +
-        (overloaded ? `\n    → The provider is temporarily overloaded — this is a server-side queue, not a bug in your setup.` : '')
+        (overloaded
+          ? `\n    → The provider is temporarily overloaded or throttling us — this is a server-side queue, not a bug in your setup.`
+          : '')
       )
       await new Promise(r => setTimeout(r, waitTime))
 

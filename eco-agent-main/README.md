@@ -376,6 +376,38 @@ export ECO_THINKING_BUDGET=0
 Not set → provider default. A fixed budget (e.g. `512`) is a good middle ground
 for complex tasks.
 
+### Rate limits, 429 and the provider dashboard
+
+Google AI Studio (and every other free tier) enforces limits **per project**:
+
+| Metric | Meaning                                             |
+| ------ | --------------------------------------------------- |
+| RPM    | requests per minute                                 |
+| TPM    | input tokens per minute                             |
+| RPD    | requests per day (resets midnight Pacific time)     |
+
+Exceeding any of them returns **HTTP 429**. Two things follow from that:
+
+1. **Every retry counts as a failed request** on the provider dashboard, so a
+   client that retries aggressively drags its own success rate down. Eco Agent
+   therefore keeps a local quota governor: it starts at 10 requests/minute for
+   Gemini (20 for OpenRouter), halves the rate whenever the provider answers
+   429 and recovers slowly afterwards. When the quota is clearly exhausted it
+   **stops retrying** and tells you to switch provider instead of burning
+   quota and waiting.
+2. **Big contexts burn the token quota.** A request with 100K input tokens can
+   use a large part of the per-minute token budget on its own — Google's own
+   advice is to "use smaller context windows". Eco Agent therefore caps the
+   context by size (60K characters, 30K for free models) and caps every tool
+   result at 8 KB.
+
+Check your real limits in **AI Studio → Rate Limit**. If you are on a paid tier
+you can raise the client-side limit:
+
+```bash
+set ECO_RPM=60        # requests per minute the client may use
+```
+
 ### Tips
 
 - `/clear` between unrelated tasks — it keeps the prompt small and the answers fast.

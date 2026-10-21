@@ -53,6 +53,9 @@ export class AgentLoop {
       let response
       let streamed = false
       try {
+        // Keep the request inside the provider's token budget — tool results
+        // from the previous iteration are part of the context as well.
+        this.context.trimIfNeeded()
         const result = await this.callModel(tools, opts)
         response = result.response
         streamed = result.streamed

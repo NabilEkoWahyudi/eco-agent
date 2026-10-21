@@ -100,9 +100,21 @@ export class ContextManager {
    * assistant message from its tool results — providers (OpenAI/Anthropic)
    * reject those orphaned sequences with HTTP 400.
    */
-  trimIfNeeded(maxMessages = 40): void {
+  /**
+   * Trim the context so it stays inside the provider's limits.
+   *
+   * Two budgets are enforced:
+   *   - message count (keeps the conversation readable)
+   *   - CHARACTER count — the important one: a single tool result can be
+   *     thousands of characters, and providers meter input tokens per minute
+   *     (TPM). A 100K-token request burns the quota and answers with 429.
+   *
+   * Whole turns are dropped (a turn = user message + its tool calls/results)
+   * so an assistant message is never separated from its tool results.
+   */
+  trimIfNeeded(maxMessages = 40, maxChars = 60_000): void {
     const limit = this.isFreeModel ? 20 : maxMessages
-    if (this.messages.length <= limit) return
+    const charLimit = this.isFreeModel ? 30_000 : maxChars
 
     // Split messages into turns (turn starts at a user message)
     const turns: Message[][] = []
@@ -111,18 +123,41 @@ export class ContextManager {
       else turns[turns.length - 1].push(m)
     }
 
-    const headTurnLimit = this.isFreeModel ? 1 : 2
-    const headTurns = turns.slice(0, headTurnLimit)
+    const turnChars = (t: Message[]) => t.reduce((n, m) => n + m.content.length, 0)
+    const totalChars = this.messages.reduce((n, m) => n + m.content.length, 0)
+    if (this.messages.length <= limit && totalChars <= charLimit) return
 
-    // Tail turns: take from the end until roughly the limit is respected
+    // Head: the oldest turns are kept for continuity, but never more than
+    // half of the budget.
+    const headTurnLimit = this.isFreeModel ? 1 : 2
+    let headTurns = turns.slice(0, headTurnLimit)
+    const halfBudget = Math.floor(charLimit / 2)
+    while (headTurns.length > 1 && headTurns.reduce((n, t) => n + turnChars(t), 0) > halfBudget) {
+      headTurns = headTurns.slice(1)
+    }
+    const headChars = headTurns.reduce((n, t) => n + turnChars(t), 0)
+
+    // Tail: take turns from the end while both budgets allow it
     const headMsgCount = headTurns.reduce((n, t) => n + t.length, 0)
     let tailMsgCount = 0
+    let tailChars = headChars
     const tailTurns: Message[][] = []
     for (let i = turns.length - 1; i >= headTurnLimit; i--) {
       const turn = turns[i]
+      const chars = turnChars(turn)
       if (tailMsgCount + headMsgCount + turn.length > limit && tailTurns.length > 0) break
+      if (tailChars + chars > charLimit) {
+        // Always keep the newest turn (the model needs the current context),
+        // but stop before the budget is blown.
+        if (tailTurns.length === 0) {
+          tailTurns.unshift(turn)
+          tailMsgCount += turn.length
+        }
+        break
+      }
       tailTurns.unshift(turn)
       tailMsgCount += turn.length
+      tailChars += chars
     }
 
     const trimmed = turns.length - headTurns.length - tailTurns.length

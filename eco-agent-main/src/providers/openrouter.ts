@@ -3,6 +3,8 @@ import { RateLimiter } from '../utils/security.js'
 import { fetchWithRetry } from '../utils/fetchHelper.js'
 import { sseLines, parseSseData } from '../utils/sse.js'
 import { streamOpenAiChat, type ProviderStreamEvent } from './streamShared.js'
+import { QuotaGovernor, rpmFromEnv } from '../utils/quota.js'
+import { printNotice } from '../utils/console.js'
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 
@@ -25,7 +27,9 @@ export class OpenRouterProvider {
   private config: ProviderConfig
   private apiKey: string
   private baseUrl: string
-  private rateLimiter = new RateLimiter(60, 60000) // 60 req/min
+  // Free tier of OpenRouter allows ~20 requests/minute — staying below it
+  // avoids HTTP 429s (which count as failed requests on the dashboard).
+  private quota = new QuotaGovernor({ rpm: rpmFromEnv(20), minRpm: 5, maxRpm: rpmFromEnv(20) })
 
   constructor(config: ProviderConfig) {
     this.config = config
@@ -36,10 +40,12 @@ export class OpenRouterProvider {
   }
 
   async complete(messages: Message[], tools: Tool[] = []): Promise<LLMResponse> {
-    const rl = this.rateLimiter.check()
-    if (!rl.allowed) {
-      const waitSec = Math.ceil((rl.retryAfterMs ?? 5000) / 1000)
-      throw new Error(`Rate limit reached. Please wait ${waitSec}s.`)
+    // Stay inside the free-tier quota locally instead of collecting 429s
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { allowed, waitMs } = this.quota.reserve()
+      if (allowed) break
+      printNotice(`\n  ! OpenRouter quota window full (${this.quota.rpm} req/min). Waiting ${Math.ceil(waitMs / 1000)}s locally...`)
+      await new Promise(r => setTimeout(r, waitMs))
     }
 
     const orMessages = messages.map(m => {
@@ -96,7 +102,7 @@ export class OpenRouterProvider {
         'X-Title': 'Eco Agent'
       },
       body: JSON.stringify(body)
-    }, { providerName: 'OpenRouter' })
+    }, { providerName: 'OpenRouter', onResponse: (r) => { if (r.status === 429) this.quota.onRateLimited(); else if (r.ok) this.quota.onSuccess() } })
 
     if (!res.ok) {
       let errMsg = `HTTP ${res.status}`
@@ -199,7 +205,7 @@ export class OpenRouterProvider {
         temperature: this.config.temperature ?? 0.7,
         stream: true
       })
-    }, { providerName: 'OpenRouter' })
+    }, { providerName: 'OpenRouter', onResponse: (r) => { if (r.status === 429) this.quota.onRateLimited(); else if (r.ok) this.quota.onSuccess() } })
 
     if (!res.ok || !res.body) throw new Error('OpenRouter stream error')
 
