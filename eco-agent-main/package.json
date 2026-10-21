@@ -16,7 +16,9 @@
     "uninstall:global": "npm uninstall -g eco-agent",
     "clean": "node -e \"const fs=require('fs'); fs.rmSync('dist',{recursive:true,force:true})\"",
     "benchmark:run": "tsx benchmarks/runner.ts",
-    "benchmark:compare": "tsx benchmarks/compare.ts"
+    "benchmark:compare": "tsx benchmarks/compare.ts",
+    "test": "node tests/run-all.mjs",
+    "test:watch": "node --test --watch tests/"
   },
   "files": [
     "dist",
