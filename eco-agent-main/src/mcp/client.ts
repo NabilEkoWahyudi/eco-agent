@@ -1,6 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import type { EventSourceInit } from 'eventsource'
 import type { McpServerConfig } from './types.js'
 import type { Tool } from '../utils/types.js'
 
@@ -20,21 +22,60 @@ export class McpClient {
   async connect(): Promise<void> {
     if (this.connected) return
 
-    let transport
+    let stdioTransport: StdioClientTransport | undefined
+    let httpAttempts: Array<{ name: string; make: () => StreamableHTTPClientTransport | SSEClientTransport }> = []
 
     if (this.config.type === 'stdio') {
       if (!this.config.command) throw new Error(`Server "${this.config.name}" missing command`)
-      transport = new StdioClientTransport({
+      stdioTransport = new StdioClientTransport({
         command: this.config.command,
         args: this.config.args ?? [],
         env: { ...process.env, ...(this.config.env ?? {}) } as Record<string, string>
       })
     } else {
       if (!this.config.url) throw new Error(`Server "${this.config.name}" missing url`)
-      transport = new SSEClientTransport(new URL(this.config.url))
+      const url = new URL(this.config.url)
+      const headers = (this.config.headers ?? {}) as Record<string, string>
+      // The SDK's EventSourceInit has no "headers" field — the documented way
+      // to authenticate is a custom fetch that injects the headers.
+      const fetchWithHeaders = (u: string | URL, init?: RequestInit) =>
+        fetch(u, { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), ...headers } })
+      if (Object.keys(headers).length > 0) {
+        // BUG FIX: configured headers were parsed & stored but never sent —
+        // authenticated remote MCP servers could never work.
+        httpAttempts = [
+          { name: 'streamable-http', make: () => new StreamableHTTPClientTransport(url, { requestInit: { headers } }) },
+          { name: 'legacy-sse', make: () => new SSEClientTransport(url, {
+            eventSourceInit: { fetch: fetchWithHeaders as unknown as EventSourceInit['fetch'] }
+          }) },
+        ]
+      } else {
+        httpAttempts = [{ name: 'legacy-sse', make: () => new SSEClientTransport(url) }]
+      }
     }
 
-    await this.client.connect(transport)
+    if (stdioTransport) {
+      await this.client.connect(stdioTransport)
+      this.connected = true
+      return
+    }
+
+    // Try modern Streamable HTTP first, fall back to legacy SSE on failure
+    let lastErr: unknown
+    let connected = false
+    for (const attempt of httpAttempts) {
+      try {
+        await this.client.connect(attempt.make())
+        connected = true
+        break
+      } catch (e) {
+        lastErr = e
+        try { await this.client.close() } catch { /* ignore */ }
+      }
+    }
+    if (!connected) {
+      throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
+    }
     this.connected = true
   }
 
@@ -62,12 +103,16 @@ export class McpClient {
 
           // Extract text content from MCP result
           if (Array.isArray(result.content)) {
-            return result.content
+            const text = result.content
               .map((c: { type: string; text?: string }) => c.type === 'text' ? c.text ?? '' : `[${c.type}]`)
               .join('\n')
+            if (text) return text
           }
 
-          return JSON.stringify(result.content)
+          // Guard: result.content may be undefined — JSON.stringify would
+          // return undefined and break downstream `.toLowerCase()` in the loop
+          if (result.content) return JSON.stringify(result.content)
+          return '(tool completed with no output)'
         } catch (e) {
           return `MCP tool error: ${(e as Error).message}`
         }
@@ -110,7 +155,7 @@ export async function loadMcpTools(servers: McpServerConfig[]): Promise<Tool[]> 
       tools.push(...serverTools)
       activeClients.push(client)
     } catch (e) {
-      console.error(`  ⚠ Failed to connect MCP server "${server.name}": ${(e as Error).message}`)
+      console.error(`  ! Failed to connect MCP server "${server.name}": ${(e as Error).message}`)
     }
   }
 

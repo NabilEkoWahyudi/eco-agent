@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, rmSync, renameSync } from 'fs'
-import { execSync } from 'child_process'
-import { resolve, extname } from 'path'
+import { spawnSync } from 'child_process'
+import { resolve, extname, join } from 'path'
 import type { Tool } from '../utils/types.js'
 import { checkShellCommand, checkFilePath } from '../utils/security.js'
 
@@ -163,50 +163,106 @@ export const shellTool: Tool = {
       return `Error: Command blocked for safety. ${check.blocked}`
     }
     if (check.warnings.length > 0) {
-      console.warn(`  ⚠ Shell warnings: ${check.warnings.join(', ')}`)
+      console.warn(`  ! Shell warnings: ${check.warnings.join(', ')}`)
     }
 
     try {
-      const output = execSync(cmd, {
+      // spawnSync (not execSync) so stdout AND stderr are always captured
+      // separately — execSync only returns stdout on success and drops
+      // stderr, which produced garbled output like
+      //   "stderr: File Not FoundAhmad\Downloads Volume in drive C has no label."
+      const res = spawnSync(cmd, {
         cwd,
+        shell: true,
+        windowsHide: true,
         timeout: 30000,
         encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe']
+        maxBuffer: 10 * 1024 * 1024,
       })
-      return output || '(command completed with no output)'
+
+      if (res.error) {
+        return `Command failed: ${res.error.message}`
+      }
+
+      const stdout = (res.stdout ?? '').trim()
+      const stderr = (res.stderr ?? '').trim()
+
+      if (res.status !== 0) {
+        const parts: string[] = []
+        if (stdout) parts.push(`stdout:\n${stdout}`)
+        if (stderr) parts.push(`stderr:\n${stderr}`)
+        parts.push(`exit code: ${res.status}`)
+        return `Command failed:\n${parts.join('\n')}`
+      }
+
+      if (stdout) return stdout
+      if (stderr) return stderr
+      return '(command completed with no output)'
     } catch (e) {
-      const err = e as { stdout?: string; stderr?: string; message?: string }
-      const out = err.stdout ? `stdout:\n${err.stdout}\n` : ''
-      const errOut = err.stderr ? `stderr:\n${err.stderr}` : err.message ?? 'Unknown error'
-      return `Command failed:\n${out}${errOut}`
+      return `Command failed: ${(e as Error).message}`
     }
   }
 }
 
 export const searchFilesTool: Tool = {
   name: 'search_files',
-  description: 'Search for text in files within a directory',
+  description: 'Search for text in files within a directory. Patterns are regular expressions.',
   parameters: {
     pattern: { type: 'string', description: 'Text or regex pattern to search for', required: true },
     path: { type: 'string', description: 'Directory to search in (default: current)', required: false },
     extension: { type: 'string', description: 'Filter by file extension e.g. ts, py', required: false }
   },
+  /**
+   * BUG FIX: this used to shell out to `grep -rn`, which does not exist on
+   * Windows cmd.exe (the tool failed 100% of the time on Windows) and allowed
+   * shell injection via an unquoted pattern. Now implemented natively in
+   * JavaScript so it works identically on Windows/macOS/Linux.
+   */
   async execute(args) {
     const pattern = args.pattern as string
     const searchPath = resolve((args.path as string) ?? '.')
     const ext = args.extension as string | undefined
 
+    let regex: RegExp
     try {
-      const grepCmd = ext
-        ? `grep -rn "${pattern}" ${searchPath} --include="*.${ext}" 2>/dev/null | head -50`
-        : `grep -rn "${pattern}" ${searchPath} 2>/dev/null | head -50`
-
-      const output = execSync(grepCmd, { encoding: 'utf-8', timeout: 10000 })
-      return output || `No matches found for: ${pattern}`
+      regex = new RegExp(pattern)
     } catch (e) {
-      const err = e as { stdout?: string }
-      return err.stdout || `No matches found for: ${pattern}`
+      return `Error: Invalid regex pattern: ${(e as Error).message}`
     }
+
+    if (!existsSync(searchPath)) return `Error: Directory not found: ${searchPath}`
+
+    const IGNORE = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'coverage', '__pycache__'])
+    const matches: string[] = []
+    const MAX_RESULTS = 50
+
+    function walk(dir: string): void {
+      if (matches.length >= MAX_RESULTS) return
+      let entries: string[]
+      try { entries = readdirSync(dir) } catch { return }
+      for (const entry of entries) {
+        if (matches.length >= MAX_RESULTS) return
+        if (IGNORE.has(entry)) continue
+        const full = join(dir, entry)
+        let stat: ReturnType<typeof statSync>
+        try { stat = statSync(full) } catch { continue }
+        if (stat.isDirectory()) { walk(full); continue }
+        if (ext && extname(entry) !== '.' + ext.replace(/^\./, '')) continue
+        let content: string
+        try { content = readFileSync(full, 'utf-8') } catch { continue } // skip binary/unreadable
+        const lines = content.split('\n')
+        for (let i = 0; i < lines.length && matches.length < MAX_RESULTS; i++) {
+          if (regex.test(lines[i])) {
+            matches.push(`${full}:${i + 1}: ${lines[i].trim().slice(0, 200)}`)
+          }
+        }
+      }
+    }
+
+    walk(searchPath)
+    if (matches.length === 0) return `No matches found for: ${pattern}`
+    const truncated = matches.length >= MAX_RESULTS ? `\n\n(Showing first ${MAX_RESULTS} matches)` : ''
+    return `Search results for "${pattern}" in ${searchPath}:\n\n${matches.join('\n')}${truncated}`
   }
 }
 
@@ -241,109 +297,25 @@ export const listCodeFilesTool: Tool = {
 
 export const webSearchTool: Tool = {
   name: 'web_search',
-  description: 'Search the web for real-time information using DuckDuckGo',
+  description: 'Search the web for real-time information. Supports Tavily (set TAVILY_API_KEY), Brave (set BRAVE_API_KEY), SearXNG (set SEARXNG_URL), or DuckDuckGo (default, no key needed).',
   parameters: {
     query: { type: 'string', description: 'Search query', required: true }
   },
   async execute(args) {
     const rawQuery = args.query as string
+    if (!rawQuery) return 'Error: Missing required parameter "query"'
 
-    // ── Strategy 1: DDG Instant Answer API (JSON, no HTML parsing needed) ──
     try {
-      const apiUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(rawQuery)}&format=json&no_html=1&skip_disambig=1`
-      const res = await fetch(apiUrl, {
-        headers: { 'User-Agent': 'eco-agent/0.1.0' },
-        signal: AbortSignal.timeout(8000)
-      })
-      if (res.ok) {
-        const data = await res.json() as {
-          AbstractText?: string
-          AbstractSource?: string
-          AbstractURL?: string
-          RelatedTopics?: Array<{ Text?: string; FirstURL?: string }>
-          Answer?: string
-          AnswerType?: string
-        }
-
-        const parts: string[] = []
-
-        // Direct answer (calculator, unit converter, etc.)
-        if (data.Answer) {
-          parts.push(`Answer: ${data.Answer}`)
-        }
-
-        // Abstract (Wikipedia-style summary)
-        if (data.AbstractText) {
-          parts.push(`${data.AbstractText}${data.AbstractURL ? `\nSource: ${data.AbstractURL}` : ''}`)
-        }
-
-        // Related topics (up to 5)
-        if (data.RelatedTopics?.length) {
-          const topics = data.RelatedTopics
-            .filter(t => t.Text && t.FirstURL)
-            .slice(0, 5)
-            .map(t => `- ${t.Text}\n  ${t.FirstURL}`)
-          if (topics.length > 0) {
-            parts.push(`Related:\n${topics.join('\n\n')}`)
-          }
-        }
-
-        if (parts.length > 0) {
-          return `Search results for "${rawQuery}":\n\n${parts.join('\n\n')}`
-        }
-        // If API returns nothing useful, fall through to HTML scraping
-      }
-    } catch { /* fall through to HTML scraping */ }
-
-    // ── Strategy 2: DDG Lite HTML scraping (robust selectors) ──
-    try {
-      const htmlUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(rawQuery)}`
-      const res = await fetch(htmlUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0',
-          'Accept': 'text/html,application/xhtml+xml',
-          'Accept-Language': 'en-US,en;q=0.9'
-        },
-        signal: AbortSignal.timeout(10000)
-      })
-      if (!res.ok) return `Error searching the web: HTTP ${res.status}`
-
-      const html = await res.text()
-      const results: string[] = []
-
-      // DDG Lite HTML structure: result titles are in <a class="result__a"> or <h2><a>
-      // Snippets are in <a class="result__snippet"> or .result__snippet spans
-      // We use broad patterns to handle DDG layout variations
-      const resultBlocks = html.match(/<div[^>]+class="[^"]*result[^"]*"[^>]*>[\s\S]*?<\/div>\s*<\/div>/g) ?? []
-
-      for (const block of resultBlocks.slice(0, 6)) {
-        // Extract title
-        const titleMatch = block.match(/<a[^>]+class="[^"]*result__a[^"]*"[^>]*>([^<]+)<\/a>/) ??
-                           block.match(/<h2[^>]*>[\s\S]*?<a[^>]+>([^<]+)<\/a>/)
-        // Extract URL
-        const urlMatch = block.match(/href="([^"]+)"/) 
-        // Extract snippet — strip all tags
-        const snippetMatch = block.match(/class="[^"]*snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/) ??
-                             block.match(/class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\//)
-
-        const title = titleMatch?.[1]?.trim()
-        const snippet = snippetMatch?.[1]?.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
-
-        if (title && snippet) {
-          const url = urlMatch?.[1] ? `\n  ${decodeURIComponent(urlMatch[1]).slice(0, 120)}` : ''
-          results.push(`- ${title}${url}\n  ${snippet}`)
-        }
-      }
-
-      if (results.length > 0) {
-        return `Search results for "${rawQuery}":\n\n${results.join('\n\n')}`
-      }
-      return `No results found for "${rawQuery}". Try rephrasing your search query.`
+      const { multiSearch, formatSearchResponse } = await import('./websearch.js')
+      const response = await multiSearch(rawQuery)
+      return formatSearchResponse(response)
     } catch (e) {
       return `Error searching the web: ${(e as Error).message}`
     }
   }
 }
+
+import { extendedTools } from './extended.js'
 
 export const defaultTools: Tool[] = [
   readFileTool,
@@ -355,5 +327,7 @@ export const defaultTools: Tool[] = [
   shellTool,
   searchFilesTool,
   listCodeFilesTool,
-  webSearchTool
+  webSearchTool,
+  // Extended tools ported from opencode:
+  ...extendedTools,
 ]

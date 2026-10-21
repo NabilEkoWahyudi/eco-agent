@@ -137,7 +137,7 @@ export function checkFilePath(filePath: string): { safe: boolean; reason?: strin
 
 export function pluginSafetyWarning(packageName: string): string {
   return [
-    chalk.yellow(`  ⚠ Security warning`),
+    chalk.yellow(`  ! Security warning`),
     chalk.gray(`  You are about to install: ${chalk.white(packageName)}`),
     chalk.gray('  Plugins run with full access to your filesystem and shell.'),
     chalk.gray('  Only install plugins from sources you trust.'),

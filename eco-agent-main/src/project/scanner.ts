@@ -34,6 +34,9 @@ const CODE_EXTENSIONS = new Set([
   '.java', '.c', '.cpp', '.cs', '.rb', '.php', '.swift'
 ])
 
+import { basename } from 'path'
+import { lstatSync } from 'fs'
+
 function buildTree(dir: string, depth = 0, maxDepth = 3): string {
   if (depth > maxDepth) return ''
   const lines: string[] = []
@@ -48,8 +51,11 @@ function buildTree(dir: string, depth = 0, maxDepth = 3): string {
   } catch { return '' }
 
   entries.sort((a, b) => {
-    const aDir = statSync(join(dir, a)).isDirectory()
-    const bDir = statSync(join(dir, b)).isDirectory()
+    // Guard against dangling symlinks/junctions (statSync throws)
+    let aDir = false
+    let bDir = false
+    try { aDir = statSync(join(dir, a)).isDirectory() } catch { /* treat as file */ }
+    try { bDir = statSync(join(dir, b)).isDirectory() } catch { /* treat as file */ }
     if (aDir && !bDir) return -1
     if (!aDir && bDir) return 1
     return a.localeCompare(b)
@@ -59,7 +65,8 @@ function buildTree(dir: string, depth = 0, maxDepth = 3): string {
     const isLast = i === Math.min(entries.length, 20) - 1
     const prefix = '  '.repeat(depth) + (isLast ? '└─ ' : '├─ ')
     const fullPath = join(dir, entry)
-    const isDir = statSync(fullPath).isDirectory()
+    let isDir = false
+    try { isDir = statSync(fullPath).isDirectory() } catch { /* skip */ }
     lines.push(prefix + entry + (isDir ? '/' : ''))
     if (isDir && depth < maxDepth) {
       lines.push(buildTree(fullPath, depth + 1, maxDepth))
@@ -97,15 +104,22 @@ function detectProjectType(root: string, pkg: Record<string, unknown> | null): s
 
 function countCodeFiles(dir: string): number {
   let count = 0
+  let entries: string[]
   try {
-    readdirSync(dir).forEach(entry => {
-      if (IGNORE_DIRS.has(entry)) return
-      const full = join(dir, entry)
-      const stat = statSync(full)
-      if (stat.isDirectory()) count += countCodeFiles(full)
-      else if (CODE_EXTENSIONS.has(extname(entry))) count++
-    })
-  } catch { /* skip */ }
+    entries = readdirSync(dir)
+  } catch { return 0 }
+  for (const entry of entries) {
+    if (IGNORE_DIRS.has(entry)) continue
+    const full = join(dir, entry)
+    let stat: { isDirectory: () => boolean }
+    try {
+      // lstatSync — do not follow symlinks/junctions to avoid infinite
+      // recursion on directory loops (common with pnpm/junctions on Windows)
+      stat = lstatSync(full)
+    } catch { continue }
+    if (stat.isDirectory()) count += countCodeFiles(full)
+    else if (CODE_EXTENSIONS.has(extname(entry))) count++
+  }
   return count
 }
 
@@ -129,7 +143,11 @@ export function scanProject(root: string): ProjectContext {
     if (!existsSync(filePath)) continue
     try {
       const content = readFileSync(filePath, 'utf-8')
-      if (filename === 'package.json') {
+      if (filename === '.env.example') {
+        // PRIVACY: .env.example often contains real API keys left inside.
+        // Never send its contents to the LLM — only record that it exists.
+        keyFiles[filename] = '[present — contents withheld for safety: env files may contain real secrets]'
+      } else if (filename === 'package.json') {
         pkg = JSON.parse(content) as Record<string, unknown>
         // Summarize package.json
         const summary = {
@@ -150,7 +168,9 @@ export function scanProject(root: string): ProjectContext {
     } catch { /* skip */ }
   }
 
-  const name = (pkg?.name as string) ?? root.split('/').pop() ?? 'unknown'
+  // basename() — `root.split('/')` never works on Windows (backslash paths),
+  // producing the full absolute path as the project name
+  const name = (pkg?.name as string) ?? basename(root) ?? 'unknown'
   const description = pkg?.description as string | undefined
   const scripts = (pkg?.scripts as Record<string, string>) ?? {}
   const dependencies = Object.keys((pkg?.dependencies as Record<string, string>) ?? {})

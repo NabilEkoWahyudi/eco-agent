@@ -79,7 +79,21 @@ export class SwarmOrchestrator extends EventEmitter<{ event: [SwarmEvent] }> {
         this.emit('event', { type: 'task:skipped', task: t, reason: 'dependency failed' })
       })
 
-      if (ready.length === 0) break
+      if (ready.length === 0) {
+        // BUG FIX: any remaining pending tasks can never become ready —
+        // dependency cycles or references to nonexistent task IDs. Mark them
+        // skipped instead of silently dropping them from the summary.
+        const orphaned = tasks.filter(t => t.status === 'pending')
+        orphaned.forEach(t => {
+          const unknownDeps = (t.dependsOn ?? []).filter(id => !tasks.some(d => d.id === id))
+          const reason = unknownDeps.length > 0
+            ? `unknown dependency: ${unknownDeps.join(', ')}`
+            : 'circular dependency — task can never become ready'
+          t.status = 'skipped'
+          this.emit('event', { type: 'task:skipped', task: t, reason })
+        })
+        break
+      }
 
       // Mark all ready tasks as running
       ready.forEach((t, i) => {

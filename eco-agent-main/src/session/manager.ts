@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
+import crypto from 'crypto'
 import type { Message } from '../utils/types.js'
 
 const ECO_DIR = join(homedir(), '.eco-agent')
@@ -32,6 +33,10 @@ function generateId(): string {
 }
 
 function sessionPath(id: string): string {
+  // Guard against path traversal: session IDs are generated as [a-z0-9]+
+  // (base36). An attacker-supplied "eco session delete ../../other" must not
+  // resolve outside the sessions directory.
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) return join(SESSIONS_DIR, '__invalid__' + crypto.randomBytes(4).toString('hex'))
   return join(SESSIONS_DIR, `${id}.json`)
 }
 
