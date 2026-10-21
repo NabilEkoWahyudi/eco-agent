@@ -117,6 +117,31 @@ eco mcp remove <name>
 | `/tools`             | List available tools                                               |
 | `/exit`              | Exit Eco Agent                                                     |
 
+### Tab Autocomplete
+
+The REPL has built-in TAB completion — no setup needed:
+
+| Keystroke                 | Result                                              |
+| ------------------------- | --------------------------------------------------- |
+| `/he<TAB>`                | Completes to `/help`, double-TAB lists all commands |
+| `/ponytail <TAB>`         | Cycles through `off`, `lite`, `full`, `ultra`       |
+| `/snapshot <TAB>`         | Cycles through `list`, `diff`, `restore`            |
+| `/cd <TAB>` / `/file <TAB>` | Lists real files & folders in the current directory (folders with a trailing `/`) |
+
+For shell-level (non-interactive) completion of the `eco` CLI itself, generate a
+script for your shell:
+
+```bash
+# bash / zsh
+eco completion bash >> ~/.bashrc && source ~/.bashrc
+
+# fish
+eco completion fish > ~/.config/fish/completions/eco.fish
+
+# PowerShell
+eco completion powershell >> $PROFILE
+```
+
 ### Feature Examples
 
 **1. Smart Paste (Long Context)**
@@ -137,21 +162,36 @@ eco › /debug npm run build
 ```
 
 **3. Interactive File Diff & Approval**
-Before Eco Agent writes, renames, or deletes a file, it will show you a visual diff and ask for permission, keeping your codebase safe:
+Before Eco Agent writes, patches, creates, renames, or deletes a file — or runs a
+shell command — it shows the context and asks for permission, keeping your codebase safe:
 
 ```bash
   ~ File will be overwritten. Preview of new contents:
   ~ + function hello() { ...
-  Apply these changes? [Y/n]
+  Proceed? [Y]es once · [n]o · [a]lways allow write_file · [v]never allow
 ```
 
-**4. Auto Git**
-Stage your files with `git add .`, then:
+Choices:
+
+| Answer | Effect                                                        |
+| ------ | ------------------------------------------------------------- |
+| `Y` / Enter | Allow **once** (cached per session)                       |
+| `n`         | Deny this tool call — the agent is told it was cancelled  |
+| `a`         | **Always allow** this action — saved to `~/.eco-agent/permissions.json` |
+| `v`         | **Never allow** — saved as a persistent deny rule         |
+
+Read-only tools (`read_file`, `list_directory`, `search_files`, …) never prompt.
+Non-interactive runs (`eco "prompt"`) honor persistent deny rules and auto-allow
+the rest.
+
+**4. Auto Git — `/commit` & `/pr`**
 
 ```bash
-eco › /commit
-eco › /pr
+eco › /commit   # inspects staged diffs → Conventional-Commits message → 'y' copies it to clipboard
+eco › /pr       # reads recent commits vs origin/main → Markdown PR title + summary + bullets
 ```
+
+Both run **without tool definitions** sent to the LLM — saving ~800–1,200 tokens per call. `/pr` falls back to the last 5 commits when no `origin/main` exists.
 
 **5. Ponytail (Anti-Overengineering)**
 
@@ -216,7 +256,15 @@ eco plugin install eco-plugin-websearch
 # Now the agent can search the web!
 eco
 > search for the latest Node.js release notes
+
+eco plugin list        # what is installed
+eco plugin remove <name>
 ```
+
+> ⚠ Plugins execute **their code inside the agent process**. Eco Agent shows a
+> safety warning and asks for confirmation before installing anything — review
+> unknown packages before agreeing. Installing from a local path also works:
+> `eco plugin install ./my-plugin` (Windows `C:\…`, UNC and `~/…` paths included).
 
 ## MCP Support
 
@@ -234,6 +282,10 @@ eco mcp add --name fs --stdio \
 
 # Any SSE server
 eco mcp add --name remote --sse --url https://my-mcp.com/mcp
+
+# Remote server with authentication headers (sent with every request)
+eco mcp add --name remote_auth --streamable --url https://my-mcp.com/mcp \
+  --header "Authorization=Bearer ghp_xxx" --header "X-Org=my-org"
 ```
 
 ## Writing a Plugin
@@ -287,6 +339,51 @@ eco plugin install my-eco-plugin
 1. Install Ollama: https://ollama.com
 2. Pull a model: `ollama pull llama3.2`
 3. Run `eco`, select Ollama, and type `llama3.2` as the model. No API key needed.
+
+## Performance Guide
+
+Eco Agent streams responses token-by-token, so you see the first words while the
+model is still generating. Every REPL turn ends with a timing line:
+
+```
+  ↳ done in 6.4s, first token 1.2s
+```
+
+| Symptom                                  | Cause & fix                                                             |
+| ---------------------------------------- | ----------------------------------------------------------------------- |
+| `first token` takes many seconds         | Provider queue / free-tier capacity. Switch provider (`/config`) — Groq paid, OpenRouter paid or Ollama local are fastest. |
+| `HTTP 503 … high demand`                 | The provider's queue is full. Eco Agent retries automatically (up to 3×, honouring the provider's `retryDelay`) and tells you it is a server-side queue. |
+| Response feels slow **after** the first words | Large context. Run `/clear` to reset the conversation, or `/save` and start a new session. |
+| Tool output floods the screen            | Tool output is capped at 8 KB (head + tail kept); the full text is never sent to the model. |
+| Long pauses between tool calls           | Each tool call is a fresh model round-trip. Fewer, bigger steps are faster. |
+| `! connection interrupted` in the log     | Network hiccup — the request is retried up to 3× with backoff. A VPN/proxy/firewall usually causes it. |
+
+### Gemini thinking budget
+
+Gemini 3.x spends "thought tokens" **before** the first visible token. On a busy
+free tier that alone can take 30–90 seconds for a one-line answer. Control it
+with an environment variable:
+
+```bash
+# Windows (PowerShell / cmd)
+set ECO_THINKING_BUDGET=0     # disable thinking → fastest answers
+set ECO_THINKING_BUDGET=-1    # dynamic thinking (provider default)
+
+# macOS / Linux
+export ECO_THINKING_BUDGET=0
+```
+
+Not set → provider default. A fixed budget (e.g. `512`) is a good middle ground
+for complex tasks.
+
+### Tips
+
+- `/clear` between unrelated tasks — it keeps the prompt small and the answers fast.
+- Prefer a fast model for exploration (Groq/Llama), a strong model for the final edit.
+- Local models (Ollama) remove network latency entirely.
+- Watch the timing line: a large gap between "first token" and "done" means the
+  model is generating slowly; a large "first token" means the provider is slow
+  to start.
 
 ## Ponytail Benchmark
 
