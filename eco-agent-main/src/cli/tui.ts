@@ -1,5 +1,6 @@
 import chalk from 'chalk'
 import ansiEscapes from 'ansi-escapes'
+import { setNoticeHook } from '../utils/console.js'
 
 // ─── Spinner ──────────────────────────────────────────────────────────────────
 
@@ -9,18 +10,33 @@ export class Spinner {
   private frame = 0
   private timer: ReturnType<typeof setInterval> | null = null
   private message: string
+  private startedAt = 0
+  private lastRender = ''
 
   constructor(message = 'Thinking...') {
     this.message = message
   }
 
   start() {
+    this.startedAt = Date.now()
     process.stdout.write(ansiEscapes.cursorHide)
+    // Let other parts of the app print notices (retry warnings) without the
+    // spinner erasing them
+    setNoticeHook(() => {
+      process.stdout.write('\r' + ansiEscapes.eraseLine)
+    })
     this.timer = setInterval(() => {
       const icon = chalk.cyan(SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length])
-      process.stdout.write(`\r  ${icon}  ${chalk.gray(this.message)}`)
+      // Elapsed time makes slow providers visible instead of looking frozen
+      const secs = Math.floor((Date.now() - this.startedAt) / 1000)
+      const label = secs > 0 ? `${this.message} (${secs}s)` : this.message
+      const line = `\r  ${icon}  ${chalk.gray(label)}`
+      // Erase the previous frame completely — avoids leftover characters when
+      // the message grows (e.g. "Thinking..." → "Running run_shell...")
+      process.stdout.write(ansiEscapes.eraseLine + line)
+      this.lastRender = line
       this.frame++
-    }, 80)
+    }, 100)
   }
 
   update(message: string) {
@@ -32,7 +48,9 @@ export class Spinner {
       clearInterval(this.timer)
       this.timer = null
     }
-    process.stdout.write('\r' + ' '.repeat(this.message.length + 10) + '\r')
+    setNoticeHook(null)
+    // Clear the spinner line completely
+    process.stdout.write('\r' + ansiEscapes.eraseLine)
     process.stdout.write(ansiEscapes.cursorShow)
   }
 }
@@ -188,13 +206,19 @@ export class StatusBar {
     const shortCwd = this.cwd.startsWith(home)
       ? '~' + this.cwd.slice(home.length)
       : this.cwd
-    const modeTag = this.mode === 'mock'
-      ? chalk.bgYellow.black(' MOCK ')
-      : this.mode === 'openrouter'
-        ? chalk.bgMagenta.black(' OPENROUTER ')
-        : this.mode === 'ollama'
-          ? chalk.bgBlue.black(' OLLAMA ')
-          : chalk.bgCyan.black(' GROQ ')
+    const modeTagMap: Record<string, string> = {
+      mock:               chalk.bgYellow.black(' MOCK '),
+      openrouter:         chalk.bgMagenta.black(' OPENROUTER '),
+      ollama:             chalk.bgBlue.black(' OLLAMA '),
+      groq:               chalk.bgCyan.black(' GROQ '),
+      openai:             chalk.bgWhite.black(' OPENAI '),
+      deepseek:           chalk.bgGreen.black(' DEEPSEEK '),
+      anthropic:          chalk.bgRed.black(' ANTHROPIC '),
+      gemini:             chalk.bgBlue.black(' GEMINI '),
+      aistudio:           chalk.bgHex('#4285F4').black(' AI STUDIO '),
+      'openai-compatible': chalk.bgCyan.black(' OAI-COMPAT '),
+    }
+    const modeTag = modeTagMap[this.mode] ?? chalk.bgGray.black(` ${this.mode.toUpperCase()} `)
     const modelStr = chalk.gray(this.model)
     const cwdStr = chalk.dim.yellow(shortCwd)
     const session = this.sessionId
@@ -237,7 +261,7 @@ export function renderToolCall(toolName: string, args: Record<string, unknown>):
   const maxLen = Math.max(toolName.length + 4, ...displayLines.map(l => l.length))
   const width = Math.min(maxLen + 4, MAX_WIDTH)
 
-  const top = chalk.yellow('  ╭─ ') + chalk.bold.yellow(`⚙ ${toolName}`) + chalk.yellow(' ' + '─'.repeat(Math.max(0, width - toolName.length - 5)) + '╮')
+  const top = chalk.yellow('  ╭─ ') + chalk.bold.yellow(`> ${toolName}`) + chalk.yellow(' ' + '─'.repeat(Math.max(0, width - toolName.length - 5)) + '╮')
   const body = displayLines.map(l => chalk.yellow('  │ ') + chalk.gray(l.padEnd(width - 4)) + chalk.yellow(' │')).join('\n')
   const bottom = chalk.yellow('  ╰' + '─'.repeat(width) + '╯')
 

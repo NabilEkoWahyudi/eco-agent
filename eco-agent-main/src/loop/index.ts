@@ -1,6 +1,7 @@
-import type { EcoConfig, Tool, ToolCall, PonytailMode, Message } from '../utils/types.js'
+import type { EcoConfig, Tool, ToolCall, PonytailMode, Message, LLMResponse } from '../utils/types.js'
 import type { Provider } from '../providers/index.js'
 import { ContextManager } from '../context/index.js'
+import { truncateToolOutput } from '../utils/truncate.js'
 
 export interface LoopOptions {
   onThinking?: () => void
@@ -10,6 +11,8 @@ export interface LoopOptions {
   onConfirmTool?: (tool: string, args: Record<string, unknown>) => Promise<boolean>
   onDone?: (finalResponse: string) => void
   onError?: (error: Error) => void
+  /** Fired once the first token of a streamed response arrives (ms since request). */
+  onFirstToken?: (ms: number) => void
 }
 
 export class AgentLoop {
@@ -48,8 +51,11 @@ export class AgentLoop {
       opts.onThinking?.()
 
       let response
+      let streamed = false
       try {
-        response = await this.provider.complete(this.context.getMessages(), tools)
+        const result = await this.callModel(tools, opts)
+        response = result.response
+        streamed = result.streamed
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e))
         opts.onError?.(err)
@@ -62,7 +68,8 @@ export class AgentLoop {
       }
 
       if (response.content) {
-        opts.onContent?.(response.content)
+        // With streaming the chunks were already delivered live — don't repeat them
+        if (!streamed) opts.onContent?.(response.content)
         finalResponse = response.content
       }
 
@@ -73,8 +80,11 @@ export class AgentLoop {
         return finalResponse
       }
 
-      // Add assistant message — content only, no redundant [Using tools: ...] annotation
-      this.context.addAssistantMessage(response.content)
+      // Add assistant message — content plus the toolCalls that will be answered
+      // by the tool-result messages that follow. Providers (OpenAI, Anthropic,
+      // Gemini) require the tool_use/tool_calls block to be present in history
+      // or they reject the follow-up tool messages with HTTP 400.
+      this.context.addAssistantMessage(response.content, response.toolCalls)
 
       // Execute all tool calls
       for (const toolCall of response.toolCalls) {
@@ -90,7 +100,10 @@ export class AgentLoop {
         }
 
         const result = await this.executeToolCall(toolCall, opts)
-        this.context.addToolResult(toolCall.id, toolCall.name, result.output)
+        // Keep the context small: huge tool outputs are re-sent with every
+        // following request and slow the model down (prefill) a lot.
+        const capped = truncateToolOutput(result.output)
+        this.context.addToolResult(toolCall.id, toolCall.name, capped.text)
 
         // Track successful writes
         if (toolCall.name === 'write_file' && !result.error && toolCall.arguments.path) {
@@ -104,6 +117,73 @@ export class AgentLoop {
     return finalResponse || maxMsg
   }
 
+  /**
+   * Ask the model for the next step.
+   *
+   * Uses the provider's streaming API when available so the user sees tokens
+   * as they are generated (time-to-first-token) instead of staring at a
+   * spinner until the whole answer is ready. Falls back to `complete()` for
+   * providers without streaming support.
+   */
+  private async callModel(
+    tools: Tool[],
+    opts: LoopOptions
+  ): Promise<{ response: LLMResponse; streamed: boolean }> {
+    const messages = this.context.getMessages()
+    const streamFn = this.provider.streamWithTools
+    if (typeof streamFn !== 'function') {
+      return { response: await this.provider.complete(messages, tools), streamed: false }
+    }
+
+    const started = Date.now()
+    let firstTokenAt: number | undefined
+    let content = ''
+    let toolCalls: ToolCall[] | undefined
+    let usage: LLMResponse['usage']
+    let received = false
+
+    try {
+      for await (const event of streamFn.call(this.provider, messages, tools)) {
+        received = true
+        if (event.type === 'text') {
+          if (firstTokenAt === undefined) {
+            firstTokenAt = Date.now() - started
+            opts.onFirstToken?.(firstTokenAt)
+          }
+          content += event.text
+          opts.onContent?.(event.text)
+        } else if (event.type === 'tool_calls') {
+          toolCalls = event.toolCalls
+        } else if (event.type === 'usage') {
+          usage = event.usage
+        }
+      }
+    } catch (e) {
+      // Streaming failed (proxy, unsupported endpoint, …). If we already have
+      // text, keep it; otherwise fall back to the non-streaming API.
+      if (content || toolCalls) {
+        opts.onError?.(e instanceof Error ? e : new Error(String(e)))
+      } else {
+        return { response: await this.provider.complete(messages, tools), streamed: false }
+      }
+    }
+
+    // The server answered but produced nothing usable → fall back
+    if (!received) {
+      return { response: await this.provider.complete(messages, tools), streamed: false }
+    }
+
+    return {
+      response: {
+        content,
+        toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
+        finishReason: toolCalls && toolCalls.length > 0 ? 'tool_calls' : 'stop',
+        usage,
+      },
+      streamed: true,
+    }
+  }
+
   private async executeToolCall(
     toolCall: ToolCall,
     opts: LoopOptions
@@ -111,9 +191,19 @@ export class AgentLoop {
     const tool = this.tools.find(t => t.name === toolCall.name)
 
     if (!tool) {
-      const msg = `Error: Unknown tool "${toolCall.name}"`
+      const msg = `Error: Unknown tool "${toolCall.name}". Available tools: ${this.tools.map(t => t.name).join(', ')}`
       opts.onToolResult?.(toolCall.name, msg, true)
       return { output: msg, error: true }
+    }
+
+    // Bug fix: validate required parameters before execution
+    // Prevents crash when LLM hallucinates tool calls with missing args
+    for (const [paramName, paramDef] of Object.entries(tool.parameters)) {
+      if (paramDef.required && (toolCall.arguments[paramName] === undefined || toolCall.arguments[paramName] === null || toolCall.arguments[paramName] === '')) {
+        const msg = `Error: Missing required parameter '${paramName}' for tool '${toolCall.name}'. Please provide all required parameters and try again.`
+        opts.onToolResult?.(toolCall.name, msg, true)
+        return { output: msg, error: true }
+      }
     }
 
     opts.onToolCall?.(toolCall.name, toolCall.arguments)
@@ -129,11 +219,17 @@ export class AgentLoop {
 
     try {
       const result = await tool.execute(toolCall.arguments)
-      const isError = result.toLowerCase().startsWith('error')
+      // Bug fix (ported from opencode): improved error detection
+      // Previously only checked startsWith('error'), missing 'Command failed:', 'failed:', etc.
+      const lowerResult = result.toLowerCase()
+      const isError = lowerResult.startsWith('error') ||
+        lowerResult.startsWith('command failed') ||
+        lowerResult.includes('\nerror:') ||
+        lowerResult.startsWith('failed:')
       opts.onToolResult?.(toolCall.name, result, isError)
       return { output: result, error: isError }
     } catch (e) {
-      const msg = `Tool error: ${(e as Error).message}`
+      const msg = `Error: Tool '${toolCall.name}' threw an exception: ${(e as Error).message}`
       opts.onToolResult?.(toolCall.name, msg, true)
       return { output: msg, error: true }
     }
@@ -150,8 +246,12 @@ export class AgentLoop {
   loadHistory(messages: Message[]): void {
     for (const m of messages) {
       if (m.role === 'user') this.context.addUserMessage(m.content)
-      else if (m.role === 'assistant') this.context.addAssistantMessage(m.content)
-      // tool messages are not restored — they are ephemeral within a turn
+      else if (m.role === 'assistant') {
+        // Tool messages are not restored (ephemeral), so an assistant message
+        // that announced toolCalls would be left dangling and break strict
+        // providers (OpenAI/Anthropic). Persist it as plain text instead.
+        this.context.addAssistantMessage(m.content)
+      }
     }
   }
 

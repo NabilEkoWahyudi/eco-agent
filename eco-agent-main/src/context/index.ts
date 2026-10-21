@@ -48,8 +48,10 @@ export class ContextManager {
     this.messages.push({ role: 'user', content })
   }
 
-  addAssistantMessage(content: string): void {
-    this.messages.push({ role: 'assistant', content })
+  addAssistantMessage(content: string, toolCalls?: Message['toolCalls']): void {
+    const msg: Message = { role: 'assistant', content }
+    if (toolCalls && toolCalls.length > 0) msg.toolCalls = toolCalls
+    this.messages.push(msg)
   }
 
   addToolResult(toolCallId: string, toolName: string, result: string): void {
@@ -92,20 +94,44 @@ export class ContextManager {
    * Trim old messages if context gets too long.
    * Free models use a tighter limit (20 msgs) to avoid hitting token limits.
    * Note: We trim by message count (pragmatic), not exact token count.
+   *
+   * IMPORTANT: trimming happens at *turn* boundaries (a turn = user message +
+   * its assistant reply + all following tool messages). Never split an
+   * assistant message from its tool results — providers (OpenAI/Anthropic)
+   * reject those orphaned sequences with HTTP 400.
    */
   trimIfNeeded(maxMessages = 40): void {
     const limit = this.isFreeModel ? 20 : maxMessages
     if (this.messages.length <= limit) return
-    // Keep first N (initial context) and last M (recent conversation)
-    const headCount = this.isFreeModel ? 2 : 4
-    const tailCount = this.isFreeModel ? 16 : 30
-    const head = this.messages.slice(0, headCount)
-    const tail = this.messages.slice(-tailCount)
-    const trimmed = this.messages.length - head.length - tail.length
+
+    // Split messages into turns (turn starts at a user message)
+    const turns: Message[][] = []
+    for (const m of this.messages) {
+      if (m.role === 'user' || turns.length === 0) turns.push([m])
+      else turns[turns.length - 1].push(m)
+    }
+
+    const headTurnLimit = this.isFreeModel ? 1 : 2
+    const headTurns = turns.slice(0, headTurnLimit)
+
+    // Tail turns: take from the end until roughly the limit is respected
+    const headMsgCount = headTurns.reduce((n, t) => n + t.length, 0)
+    let tailMsgCount = 0
+    const tailTurns: Message[][] = []
+    for (let i = turns.length - 1; i >= headTurnLimit; i--) {
+      const turn = turns[i]
+      if (tailMsgCount + headMsgCount + turn.length > limit && tailTurns.length > 0) break
+      tailTurns.unshift(turn)
+      tailMsgCount += turn.length
+    }
+
+    const trimmed = turns.length - headTurns.length - tailTurns.length
+    if (trimmed <= 0) return
+
     this.messages = [
-      ...head,
-      { role: 'assistant', content: `[... ${trimmed} earlier messages trimmed to save context ...]` },
-      ...tail
+      ...headTurns.flat(),
+      { role: 'assistant', content: `[... ${trimmed} earlier turn${trimmed !== 1 ? 's' : ''} trimmed to save context ...]` },
+      ...tailTurns.flat()
     ]
   }
 }
