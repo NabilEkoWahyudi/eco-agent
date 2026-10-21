@@ -1,6 +1,8 @@
 import type { Message, LLMResponse, ProviderConfig, Tool } from '../utils/types.js'
 import { RateLimiter } from '../utils/security.js'
 import { fetchWithRetry } from '../utils/fetchHelper.js'
+import { sseLines, parseSseData } from '../utils/sse.js'
+import { streamOpenAiChat, type ProviderStreamEvent } from './streamShared.js'
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 
@@ -22,11 +24,14 @@ export const OPENROUTER_MODELS = [
 export class OpenRouterProvider {
   private config: ProviderConfig
   private apiKey: string
+  private baseUrl: string
   private rateLimiter = new RateLimiter(60, 60000) // 60 req/min
 
   constructor(config: ProviderConfig) {
     this.config = config
     this.apiKey = config.apiKey ?? process.env.OPENROUTER_API_KEY ?? ''
+    // Honor a custom baseUrl (proxy / tests)
+    this.baseUrl = (config.baseUrl ?? OPENROUTER_BASE_URL).replace(/\/+$/, '')
     if (!this.apiKey) throw new Error('OPENROUTER_API_KEY not set.')
   }
 
@@ -40,6 +45,17 @@ export class OpenRouterProvider {
     const orMessages = messages.map(m => {
       if (m.role === 'tool') {
         return { role: 'tool', content: m.content, tool_call_id: m.toolCallId ?? 'unknown' }
+      }
+      if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+        return {
+          role: 'assistant',
+          content: m.content,
+          tool_calls: m.toolCalls.map(tc => ({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) }
+          }))
+        }
       }
       return { role: m.role, content: m.content }
     })
@@ -71,7 +87,7 @@ export class OpenRouterProvider {
       body.tool_choice = 'auto'
     }
 
-    const res = await fetchWithRetry(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    const res = await fetchWithRetry(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -113,12 +129,23 @@ export class OpenRouterProvider {
       }
     }
 
+    // Bug fix (ported from opencode): guard against empty/undefined choices
+    // Happens when model returns no response (overloaded, tool not supported, etc.)
+    if (!data.choices || data.choices.length === 0) {
+      throw new Error('OpenRouter: Model did not return any choices (choices empty/undefined). The model may be overloaded or does not support tool calling. Try /config to switch models.')
+    }
     const choice = data.choices[0]
-    const toolCalls = choice.message.tool_calls?.map(tc => ({
-      id: tc.id,
-      name: tc.function.name,
-      arguments: JSON.parse(tc.function.arguments) as Record<string, unknown>
-    }))
+    if (!choice?.message) {
+      throw new Error('OpenRouter: Model returned an invalid choice (no message). Try a different model via /config.')
+    }
+    let toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> | undefined
+    if (choice.message.tool_calls) {
+      toolCalls = choice.message.tool_calls.map(tc => {
+        let parsedArgs: Record<string, unknown> = {}
+        try { parsedArgs = JSON.parse(tc.function.arguments) as Record<string, unknown> } catch { /* keep empty */ }
+        return { id: tc.id, name: tc.function.name, arguments: parsedArgs }
+      })
+    }
 
     const usage = data.usage ? {
       promptTokens: data.usage.prompt_tokens,
@@ -134,10 +161,31 @@ export class OpenRouterProvider {
     }
   }
 
+  /**
+   * Streaming with tool support (text deltas + tool calls).
+   */
+  async *streamWithTools(messages: Message[], tools: Tool[] = []): AsyncGenerator<ProviderStreamEvent> {
+    yield* streamOpenAiChat({
+      url: `${this.baseUrl}/chat/completions`,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+        'HTTP-Referer': 'https://github.com/eco-agent',
+        'X-Title': 'Eco Agent',
+      },
+      model: this.config.model,
+      messages,
+      tools,
+      providerName: 'OpenRouter',
+      temperature: this.config.temperature,
+      maxTokens: this.config.maxTokens,
+    })
+  }
+
   async *stream(messages: Message[]): AsyncGenerator<string> {
     const orMessages = messages.map(m => ({ role: m.role, content: m.content }))
 
-    const res = await fetchWithRetry(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    const res = await fetchWithRetry(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -155,31 +203,23 @@ export class OpenRouterProvider {
 
     if (!res.ok || !res.body) throw new Error('OpenRouter stream error')
 
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      const lines = decoder.decode(value).split('\n')
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const json = line.slice(6)
-        if (json === '[DONE]') return
-        try {
-          const chunk = JSON.parse(json) as {
-            choices: Array<{ delta: { content?: string }; finish_reason?: string }>
-          }
-          const content = chunk.choices[0]?.delta?.content
-          if (content) yield content
-        } catch { /* skip */ }
-      }
+    for await (const line of sseLines(res)) {
+      const json = parseSseData(line)
+      if (json === null) continue
+      if (json === '[DONE]') return
+      try {
+        const chunk = JSON.parse(json) as {
+          choices: Array<{ delta: { content?: string }; finish_reason?: string }>
+        }
+        const content = chunk.choices[0]?.delta?.content
+        if (content) yield content
+      } catch { /* skip */ }
     }
   }
 
   async listModels(): Promise<Array<{ id: string; name: string }>> {
     try {
-      const res = await fetchWithRetry(`${OPENROUTER_BASE_URL}/models`, {
+      const res = await fetchWithRetry(`${this.baseUrl}/models`, {
         headers: { 'Authorization': `Bearer ${this.apiKey}` }
       }, { maxRetries: 2, providerName: 'OpenRouter' })
       const data = await res.json() as { data: Array<{ id: string; name: string }> }

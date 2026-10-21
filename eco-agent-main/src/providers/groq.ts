@@ -1,6 +1,8 @@
 import type { Message, LLMResponse, ProviderConfig, Tool } from '../utils/types.js'
 import { RateLimiter } from '../utils/security.js'
 import { fetchWithRetry } from '../utils/fetchHelper.js'
+import { sseLines, parseSseData } from '../utils/sse.js'
+import { streamOpenAiChat, type ProviderStreamEvent } from './streamShared.js'
 
 const GROQ_BASE_URL = 'https://api.groq.com/openai/v1'
 
@@ -19,6 +21,17 @@ export class GroqProvider {
     const groqMessages = messages.map(m => {
       if (m.role === 'tool') {
         return { role: 'tool', content: m.content, tool_call_id: m.toolCallId ?? 'unknown' }
+      }
+      if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+        return {
+          role: 'assistant',
+          content: m.content,
+          tool_calls: m.toolCalls.map(tc => ({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) }
+          }))
+        }
       }
       return { role: m.role, content: m.content }
     })
@@ -116,6 +129,25 @@ export class GroqProvider {
     }
   }
 
+  /**
+   * Streaming with tool support (text deltas + tool calls).
+   */
+  async *streamWithTools(messages: Message[], tools: Tool[] = []): AsyncGenerator<ProviderStreamEvent> {
+    yield* streamOpenAiChat({
+      url: `${GROQ_BASE_URL}/chat/completions`,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      model: this.config.model,
+      messages,
+      tools,
+      providerName: 'Groq',
+      temperature: this.config.temperature,
+      maxTokens: this.config.maxTokens,
+    })
+  }
+
   async *stream(messages: Message[]): AsyncGenerator<string> {
     const groqMessages = messages.map(m => ({ role: m.role, content: m.content }))
 
@@ -135,25 +167,17 @@ export class GroqProvider {
 
     if (!res.ok || !res.body) throw new Error('Groq stream error')
 
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      const lines = decoder.decode(value).split('\n')
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const json = line.slice(6)
-        if (json === '[DONE]') return
-        try {
-          const chunk = JSON.parse(json) as {
-            choices: Array<{ delta: { content?: string }; finish_reason?: string }>
-          }
-          const content = chunk.choices[0]?.delta?.content
-          if (content) yield content
-        } catch { /* skip */ }
-      }
+    for await (const line of sseLines(res)) {
+      const json = parseSseData(line)
+      if (json === null) continue
+      if (json === '[DONE]') return
+      try {
+        const chunk = JSON.parse(json) as {
+          choices: Array<{ delta: { content?: string }; finish_reason?: string }>
+        }
+        const content = chunk.choices[0]?.delta?.content
+        if (content) yield content
+      } catch { /* skip */ }
     }
   }
 }

@@ -86,15 +86,15 @@ export async function checkGroqModel(
     const model = data.data.find(m => m.id === modelId)
     if (!model) return null
 
-    // Groq models that support tools (known list)
+    // Groq models that support tools — decommissioned models removed
+    // (mixtral-8x7b-32768 and llama-3.1-70b-versatile were retired from Groq)
     const groqToolModels = [
       'llama-3.3-70b-versatile',
-      'llama-3.1-70b-versatile',
       'llama-3.1-8b-instant',
       'llama3-groq-70b-8192-tool-use-preview',
       'llama3-groq-8b-8192-tool-use-preview',
       'gemma2-9b-it',
-      'mixtral-8x7b-32768',
+      'qwen-qwq-32b',
     ]
     // Use proper matching: check if modelId exactly matches or ends with a known tool model
     const supportsTools = groqToolModels.some(m => modelId === m || modelId.includes(m))
@@ -105,7 +105,7 @@ export async function checkGroqModel(
       name: model.id,
       supportsTools,
       contextLength: model.context_window,
-      isFree: true // Groq is free tier
+      isFree: false // Groq has free and paid tiers — cost is rounded in display
     }
   } catch {
     return null
@@ -133,11 +133,11 @@ export function displayModelInfo(caps: ModelCapabilities): void {
     ? chalk.green('✓ Supported')
     : chalk.red('✗ Not supported (text-only mode)')
   console.log(chalk.gray('  │ ') + chalk.gray('Tools   : ') + toolStr)
-  console.log(chalk.gray('  └' + '─'.repeat(46) + '┘'))
+  console.log(chalk.gray('  └' + '─'.repeat(45) + '┘'))
   console.log()
 
   if (!caps.supportsTools) {
-    console.log(chalk.yellow('  ⚠ This model runs in text-only mode.'))
+    console.log(chalk.yellow('  ! This model runs in text-only mode.'))
     console.log(chalk.gray('  Agent will answer questions but cannot use file/shell tools.'))
     console.log(chalk.gray('  For tool support, try: deepseek/deepseek-r1:free'))
     console.log()
