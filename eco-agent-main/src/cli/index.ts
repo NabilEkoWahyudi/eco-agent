@@ -8,6 +8,7 @@ import { createProvider } from '../providers/index.js'
 import { AgentLoop } from '../loop/index.js'
 import { defaultTools } from '../tools/index.js'
 import { PermissionManager, getToolDangerLevel, evaluatePermission, loadSavedRules } from '../permissions/index.js'
+import { ensureLineStart } from '../utils/console.js'
 import type { EcoConfig, Tool } from '../utils/types.js'
 import { getSavedConfig, saveConfig, clearConfig, getPonytailMode, savePonytailMode } from '../utils/configStore.js'
 import { runSetupWizard } from '../utils/setupWizard.js'
@@ -151,10 +152,12 @@ function buildEcoConfig(mode: string, apiKey?: string, model?: string, systemPro
 
 /**
  * Does this provider mode require an API key?
- * (ollama and mock work fully offline)
+ * - ollama and mock work fully offline
+ * - openai-compatible usually points at a local gateway (LM Studio, vLLM,
+ *   LocalAI) and works without a key
  */
 function providerNeedsKey(mode: string): boolean {
-  return !['ollama', 'mock'].includes(mode)
+  return !['ollama', 'mock', 'openai-compatible'].includes(mode)
 }
 
 /**
@@ -1098,6 +1101,9 @@ async function runREPL(
       onContent: (chunk) => {
         if (firstContent) {
           spinner.stop()
+          // Start the response block on its own line (the previous output may
+          // not have ended with a newline)
+          ensureLineStart()
           process.stdout.write(renderDivider('response') + '\n')
           firstContent = false
           streamedLive = true
@@ -1108,6 +1114,8 @@ async function runREPL(
 
       onToolCall: (toolName, args) => {
         spinner.stop()
+        // Start the tool box on its own line so streamed text above is kept
+        ensureLineStart()
         if (toolName !== 'write_file') {
           console.log(renderToolCall(toolName, args))
         }
@@ -1159,6 +1167,8 @@ async function runREPL(
 
       onToolResult: (_name, result, error) => {
         spinner.stop()
+        // Keep the result on its own line
+        ensureLineStart()
         console.log(renderToolResult(_name, result, error))
         spinner.update('Waiting for model...')
         spinner.start()
@@ -1184,6 +1194,10 @@ async function runREPL(
 
       onDone: () => {
         spinner.stop()
+        // The streamed answer has no trailing newline — close the line before
+        // printing the closing divider, otherwise the divider would be
+        // appended to the answer.
+        ensureLineStart()
         if (responseBuffer) {
           if (streamedLive) {
             // The text was already printed live while the model generated it.

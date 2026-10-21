@@ -43,3 +43,6 @@ Thumbs.db
 # ─── Large local archives (never commit) ─────────────────────────────────────
 opencode.zip
 *.zip
+
+# ─── Local screenshots (bug reports, not part of the project) ───────────────
+*.png

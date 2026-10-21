@@ -1,6 +1,6 @@
 import chalk from 'chalk'
 import ansiEscapes from 'ansi-escapes'
-import { setNoticeHook } from '../utils/console.js'
+import { setNoticeHook, ensureLineStart, markLineCleared } from '../utils/console.js'
 
 // ─── Spinner ──────────────────────────────────────────────────────────────────
 
@@ -11,7 +11,8 @@ export class Spinner {
   private timer: ReturnType<typeof setInterval> | null = null
   private message: string
   private startedAt = 0
-  private lastRender = ''
+  /** True only while the spinner actually owns the current line. */
+  private painted = false
 
   constructor(message = 'Thinking...') {
     this.message = message
@@ -19,11 +20,15 @@ export class Spinner {
 
   start() {
     this.startedAt = Date.now()
+    // Never paint over text that is still on the current line (e.g. a
+    // streamed model answer without a trailing newline).
+    ensureLineStart()
     process.stdout.write(ansiEscapes.cursorHide)
     // Let other parts of the app print notices (retry warnings) without the
     // spinner erasing them
     setNoticeHook(() => {
       process.stdout.write('\r' + ansiEscapes.eraseLine)
+      markLineCleared()
     })
     this.timer = setInterval(() => {
       const icon = chalk.cyan(SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length])
@@ -34,7 +39,7 @@ export class Spinner {
       // Erase the previous frame completely — avoids leftover characters when
       // the message grows (e.g. "Thinking..." → "Running run_shell...")
       process.stdout.write(ansiEscapes.eraseLine + line)
-      this.lastRender = line
+      this.painted = true
       this.frame++
     }, 100)
   }
@@ -49,8 +54,14 @@ export class Spinner {
       this.timer = null
     }
     setNoticeHook(null)
-    // Clear the spinner line completely
-    process.stdout.write('\r' + ansiEscapes.eraseLine)
+    // Only clear the line if the spinner actually painted on it. Otherwise we
+    // would erase content that was written after the last frame (this was
+    // the reason model answers "disappeared").
+    if (this.painted) {
+      process.stdout.write('\r' + ansiEscapes.eraseLine)
+      markLineCleared()
+    }
+    this.painted = false
     process.stdout.write(ansiEscapes.cursorShow)
   }
 }
