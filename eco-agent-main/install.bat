@@ -1,9 +1,11 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
+REM UTF-8 codepage so the banner and ═ box chars render correctly
+chcp 65001 >nul
 
 echo.
 echo   ══════════════════════════════════════
-echo    🌿 ECO AGENT — Installer (Windows)
+echo    ECO AGENT — Installer (Windows)
 echo   ══════════════════════════════════════
 echo.
 
@@ -46,7 +48,7 @@ if %errorlevel% neq 0 (
 echo   [OK] 'eco' command installed!
 echo.
 echo   ══════════════════════════════════════
-echo    🌿 Eco Agent is ready!
+echo    Eco Agent is ready!
 echo   ══════════════════════════════════════
 echo.
 echo   Run with:
