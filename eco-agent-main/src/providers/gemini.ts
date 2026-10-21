@@ -52,6 +52,17 @@ export class GeminiProvider {
   }
 
   /**
+   * Build an error that carries the HTTP status.
+   * The agent loop uses the status to decide whether a streaming failure may
+   * be retried in another mode (4xx = invalid request → surface it).
+   */
+  private _error(status: number, message: string): Error {
+    const err = new Error(message) as Error & { status?: number }
+    err.status = status
+    return err
+  }
+
+  /**
    * Feed the quota governor with the provider's answer:
    * 429 → halve our own rate, success → slowly recover.
    */
@@ -88,12 +99,28 @@ export class GeminiProvider {
    *
    * Returns { url, headers } ready to use in fetch.
    */
-  private _buildAuth(baseUrl: string): { url: string; headers: Record<string, string> } {
+  private _buildAuth(rawUrl: string): { url: string; headers: Record<string, string> } {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     // All Google AI Studio API key formats use the ?key= query param
-    return { url: `${baseUrl}?key=${encodeURIComponent(this.apiKey)}`, headers }
+    //
+    // BUG FIX: the key used to be appended with a plain `?key=`, which broke
+    // every URL that already had a query parameter:
+    //   ...:streamGenerateContent?alt=sse?key=AIza...
+    //   → 400 "Invalid value \"sse?key=...\" for query parameter 'alt'"
+    // The streaming endpoint therefore ALWAYS failed and the agent fell back
+    // to a second (non-streaming) request — doubling the latency and adding
+    // a failed request to the provider dashboard.
+    try {
+      const url = new URL(rawUrl)
+      url.searchParams.set('key', this.apiKey)
+      return { url: url.toString(), headers }
+    } catch {
+      // Not an absolute URL — fall back to a plain string (and make sure the
+      // key is separated with & when a query string already exists)
+      const sep = rawUrl.includes('?') ? '&' : '?'
+      return { url: `${rawUrl}${sep}key=${encodeURIComponent(this.apiKey)}`, headers }
+    }
   }
-
   /**
    * Thinking budget (Gemini 3.x).
    *
@@ -165,14 +192,14 @@ export class GeminiProvider {
         errMsg = err.error?.message ?? errMsg
       } catch { /* ignore */ }
 
-      if (res.status === 429) throw new Error(
+      if (res.status === 429) throw this._error(res.status,
         'Gemini rate limit reached (HTTP 429). The free tier quota (requests per minute or tokens per minute) is exhausted — ' +
         'wait about a minute, use /clear to shrink the context, or switch provider (/config).'
       )
-      if (res.status === 400) throw new Error(`Gemini bad request: ${errMsg}`)
-      if (res.status === 403) throw new Error('Gemini: Invalid API Key or API not enabled. Check aistudio.google.com.')
-      if (res.status === 503) throw new Error(`Gemini is temporarily overloaded (503): ${errMsg}\n  → This is a server-side queue at Google — try again in a minute, use a different model, or switch provider (/config).`)
-      throw new Error(`Gemini error: ${errMsg}`)
+      if (res.status === 400) throw this._error(res.status, `Gemini bad request: ${errMsg}`)
+      if (res.status === 403) throw this._error(res.status, 'Gemini: Invalid API Key or API not enabled. Check aistudio.google.com.')
+      if (res.status === 503) throw this._error(res.status, `Gemini is temporarily overloaded (503): ${errMsg}\n  → This is a server-side queue at Google — try again in a minute, use a different model, or switch provider (/config).`)
+      throw this._error(res.status, `Gemini error: ${errMsg}`)
     }
 
     const data = await res.json() as {

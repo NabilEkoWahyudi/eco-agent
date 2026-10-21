@@ -164,6 +164,14 @@ export class AgentLoop {
     } catch (e) {
       // Streaming failed (proxy, unsupported endpoint, …). If we already have
       // text, keep it; otherwise fall back to the non-streaming API.
+      //
+      // A 4xx error means the REQUEST ITSELF is invalid (bad URL, bad
+      // parameter, invalid API key). Repeating it in another mode would only
+      // waste time and add another failed request to the provider dashboard,
+      // so those errors are surfaced directly.
+      const status = (e as { status?: number })?.status
+      const isClientError = typeof status === 'number' && status >= 400 && status < 500
+      if (isClientError) throw e
       if (content || toolCalls) {
         opts.onError?.(e instanceof Error ? e : new Error(String(e)))
       } else {
