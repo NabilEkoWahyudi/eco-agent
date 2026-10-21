@@ -2,6 +2,7 @@ import Conf from 'conf'
 import type { SavedConfig } from './setupWizard.js'
 import { parsePonytailMode } from '../rulesets/ponytail.js'
 import type { PonytailMode } from '../rulesets/ponytail.js'
+import { saveSecret, loadSecret } from './secretStore.js'
 
 export type { SavedConfig }
 
@@ -21,8 +22,10 @@ export function getSavedConfig(): SavedConfig | null {
   if (!mode) return null
   return {
     mode: mode as SavedConfig['mode'],
-    apiKey: store.get('apiKey', '') || undefined,
-    model: store.get('model', 'llama-3.3-70b-versatile') || 'llama-3.3-70b-versatile',
+    // API key lives in the dedicated secret store (DPAPI-encrypted on
+    // Windows). Legacy plaintext fallback for old configs.
+    apiKey: loadSecret('apiKey') || store.get('apiKey', '') || undefined,
+    model: store.get('model', '') || undefined,
     baseUrl: store.get('baseUrl', '') || undefined,
     supportsTools: store.get('supportsTools', true)
   }
@@ -30,7 +33,13 @@ export function getSavedConfig(): SavedConfig | null {
 
 export function saveConfig(config: SavedConfig): void {
   store.set('mode', config.mode)
-  store.set('apiKey', config.apiKey ?? '')
+  // Store the API key in the secret store instead of the plain config file.
+  // SECURITY: the previous version wrote API keys unencrypted to
+  // %APPDATA%\eco-agent-nodejs\Config\config.json where any process running
+  // as the same user could read them.
+  saveSecret('apiKey', config.apiKey ?? '')
+  // Keep legacy field blank so old plaintext copies do not linger
+  store.set('apiKey', '')
   store.set('model', config.model ?? 'llama-3.3-70b-versatile')
   store.set('baseUrl', config.baseUrl ?? '')
   store.set('supportsTools', config.supportsTools ?? true)
