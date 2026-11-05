@@ -3,7 +3,7 @@
 > Lightweight, extensible agentic CLI — powered by local & cloud LLMs.
 
 [![npm version](https://img.shields.io/npm/v/eco-agent.svg)](https://www.npmjs.com/package/eco-agent)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![Ponytail](https://img.shields.io/badge/ponytail-fidelity%20100%25-brightgreen)](benchmarks/README.md)
 
@@ -250,12 +250,15 @@ Customize per-project behavior by editing `.eco/prompt.md`.
 ## Plugin System
 
 ```bash
-# Install web search plugin (no API key needed)
-eco plugin install eco-plugin-websearch
-
-# Now the agent can search the web!
+# Web search is built in — no plugin required.
 eco
 > search for the latest Node.js release notes
+
+# Optional: install the hardened web_fetch plugin to read public web pages.
+# Localhost, private networks and metadata endpoints are blocked.
+eco plugin install eco-plugin-websearch
+eco
+> fetch https://example.com and summarize it
 
 eco plugin list        # what is installed
 eco plugin remove <name>
@@ -471,4 +474,4 @@ benchmarks/
 
 ## License
 
-MIT © Eco Agent Contributors
+GPL-3.0 © Eco Agent Contributors

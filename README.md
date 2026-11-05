@@ -209,12 +209,15 @@ Customize per-project behavior by editing `.eco/prompt.md`.
 ## Plugin System
 
 ```bash
-# Install web search plugin (no API key needed)
-eco plugin install eco-plugin-websearch
-
-# Now the agent can search the web!
+# Web search is built in — no plugin required.
 eco
 > search for the latest Node.js release notes
+
+# Optional: install the hardened web_fetch plugin to read public web pages.
+# Localhost, private networks and metadata endpoints are blocked.
+eco plugin install eco-plugin-websearch
+eco
+> fetch https://example.com and summarize it
 ```
 
 ## MCP Support
@@ -338,3 +341,7 @@ benchmarks/
 ├── tasks/        4 sample benchmark tasks (real-world coding scenarios)
 └── results/      Per-run JSON results (git-tracked)
 ```
+
+## License
+
+GPL-3.0 © Eco Agent Contributors

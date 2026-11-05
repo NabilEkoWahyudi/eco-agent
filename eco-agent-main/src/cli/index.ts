@@ -6,7 +6,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { createProvider } from '../providers/index.js'
 import { AgentLoop } from '../loop/index.js'
-import { defaultTools } from '../tools/index.js'
+import { defaultTools, mergeTools } from '../tools/index.js'
 import { PermissionManager, getToolDangerLevel, evaluatePermission, loadSavedRules } from '../permissions/index.js'
 import { ensureLineStart } from '../utils/console.js'
 import type { EcoConfig, Tool } from '../utils/types.js'
@@ -383,14 +383,15 @@ async function runREPL(
             const newSaved = await runSetupWizard(true)
             saveConfig(newSaved)
             const reloadedPlugins = await loadAllPlugins()
+            const reloadedTools = mergeTools(defaultTools, reloadedPlugins)
             const currentPonytail = agent.getPonytailMode()
             await runREPL(
               buildEcoConfig(newSaved.mode, newSaved.apiKey, newSaved.model, undefined, newSaved.baseUrl, currentPonytail),
               newSaved.mode,
               newSaved.model ?? (newSaved.mode === 'ollama' ? 'llama3.2' : 'llama-3.3-70b-versatile'),
-              [...defaultTools, ...reloadedPlugins],
+              reloadedTools,
               undefined,
-              reloadedPlugins.length
+              Math.max(0, reloadedTools.length - defaultTools.length)
             )
           }
           return
@@ -1307,7 +1308,7 @@ program
 
     // Respect model tool support capability
     const supportsTools = saved.supportsTools !== false
-    const allTools = supportsTools ? [...defaultTools, ...pluginTools, ...mcpTools] : []
+    const allTools = supportsTools ? mergeTools(defaultTools, pluginTools, mcpTools) : []
 
     if (!supportsTools) {
       console.log(chalk.yellow('  ! Text-only mode — this model does not support tools.'))
@@ -1353,7 +1354,7 @@ program
       return
     }
 
-    await runREPL(config, saved.mode, modelName, allTools, resumeId, pluginTools.length + mcpTools.length)
+    await runREPL(config, saved.mode, modelName, allTools, resumeId, Math.max(0, allTools.length - defaultTools.length))
   })
 
 // ─── Plugin subcommand ────────────────────────────────────────────────────────
@@ -1724,7 +1725,7 @@ program
     const mcpTools = mcpServers.length > 0 ? await loadMcpTools(mcpServers) : []
     // Respect model tool support capability
     const supportsTools = saved.supportsTools !== false
-    const allTools = supportsTools ? [...defaultTools, ...pluginTools, ...mcpTools] : []
+    const allTools = supportsTools ? mergeTools(defaultTools, pluginTools, mcpTools) : []
 
     if (!supportsTools) {
       console.log(chalk.yellow('  ! Text-only mode — this model does not support tools.'))

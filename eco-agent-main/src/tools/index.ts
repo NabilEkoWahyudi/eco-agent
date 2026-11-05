@@ -317,6 +317,27 @@ export const webSearchTool: Tool = {
 
 import { extendedTools } from './extended.js'
 
+/**
+ * Merge tool groups while keeping the first tool registered for each name.
+ * Built-in tools are merged first, so a plugin or MCP server cannot silently
+ * replace them or send duplicate function names to the model.
+ */
+export function mergeTools(...groups: Tool[][]): Tool[] {
+  const byName = new Map<string, Tool>()
+
+  for (const group of groups) {
+    for (const tool of group) {
+      if (byName.has(tool.name)) {
+        console.warn(`[eco] Duplicate tool "${tool.name}" ignored.`)
+        continue
+      }
+      byName.set(tool.name, tool)
+    }
+  }
+
+  return [...byName.values()]
+}
+
 export const defaultTools: Tool[] = [
   readFileTool,
   writeFileTool,

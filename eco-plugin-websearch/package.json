@@ -1,9 +1,13 @@
 {
   "name": "eco-plugin-websearch",
-  "version": "1.0.0",
-  "description": "Web search tool for Eco Agent — powered by DuckDuckGo (no API key needed)",
+  "version": "1.1.0",
+  "description": "Hardened web fetch plugin for Eco Agent. Built-in web search is provided by Eco Agent.",
   "main": "index.js",
   "type": "commonjs",
-  "keywords": ["eco-agent", "eco-plugin"],
-  "license": "MIT"
+  "keywords": ["eco-agent", "eco-plugin", "web-fetch"],
+  "license": "GPL-3.0-only",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": ["index.js", "LICENSE"]
 }
