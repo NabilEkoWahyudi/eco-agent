@@ -11,6 +11,8 @@
  * gateway reuse it.
  */
 import type { Message, Tool, ToolCall } from '../utils/types.js'
+import type { RateLimitInfo } from '../utils/rateLimit.js'
+import { rateLimitFromBody, rateLimitFromHeaders } from '../utils/rateLimit.js'
 import { fetchWithRetry } from '../utils/fetchHelper.js'
 import { sseLines, parseSseData } from '../utils/sse.js'
 
@@ -154,12 +156,31 @@ export async function* streamOpenAiChat(opts: OpenAiStreamOptions): AsyncGenerat
     // request (4xx: bad key, rate limit, invalid parameter) from a transient
     // upstream failure. Repeating a 4xx through the non-streaming endpoint
     // would only waste another request.
+    let serverMsg: string | undefined
+    let rateLimitInfo: RateLimitInfo | undefined
+    try {
+      const contentType = res.headers.get('content-type') ?? ''
+      if (contentType.includes('json')) {
+        const body = await res.clone().json() as { error?: { message?: string } }
+        serverMsg = body?.error?.message
+        // OpenRouter repeats its quota headers inside error.metadata.headers —
+        // that is where the exact "quota recovers at" instant comes from.
+        rateLimitInfo = rateLimitFromBody(body)
+      }
+    } catch { /* body not JSON — fall through */ }
+    if (!rateLimitInfo) {
+      try { rateLimitInfo = rateLimitFromHeaders(res.headers) } catch { /* ignore */ }
+    }
     let detail = ''
-    try { detail = (await res.clone().text()).slice(0, 300) } catch { /* ignore */ }
+    if (!serverMsg) {
+      try { detail = (await res.clone().text()).slice(0, 200).trim() } catch { /* ignore */ }
+    }
     const err = new Error(
-      `${opts.providerName} stream error (HTTP ${res.status})${detail ? `: ${detail}` : ''}`
-    ) as Error & { status?: number }
+      `${opts.providerName} stream error (HTTP ${res.status})` +
+      (serverMsg ? `: ${serverMsg}` : detail ? `: ${detail}` : '')
+    ) as Error & { status?: number; rateLimit?: RateLimitInfo }
     err.status = res.status
+    err.rateLimit = rateLimitInfo
     throw err
   }
 

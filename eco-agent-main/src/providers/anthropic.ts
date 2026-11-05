@@ -1,4 +1,5 @@
 import type { Message, LLMResponse, ProviderConfig, Tool, ToolCall } from '../utils/types.js'
+import { rateLimitFromHeaders, describeQuotaReset, withRateLimit } from '../utils/rateLimit.js'
 import { RateLimiter } from '../utils/security.js'
 import { fetchWithRetry } from '../utils/fetchHelper.js'
 import { sseLines, parseSseData } from '../utils/sse.js'
@@ -94,7 +95,14 @@ export class AnthropicProvider {
         errMsg = err.error?.message ?? errMsg
       } catch { /* ignore */ }
 
-      if (res.status === 429) throw new Error('Anthropic rate limit reached. Please wait a moment.')
+      if (res.status === 429) {
+        const info = (() => { try { return rateLimitFromHeaders(res.headers) } catch { return undefined } })()
+        const reset = describeQuotaReset(info)
+        throw withRateLimit(
+          new Error(`Anthropic rate limit reached (HTTP 429)${reset ? `\n  → ${reset}` : ''}.`),
+          info
+        )
+      }
       if (res.status === 401) throw new Error('Anthropic: Invalid API Key. Run /config to update it.')
       if (res.status === 400) throw new Error(`Anthropic bad request: ${errMsg}`)
       throw new Error(`Anthropic error: ${errMsg}`)

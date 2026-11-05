@@ -3,6 +3,7 @@ import { RateLimiter } from '../utils/security.js'
 import { fetchWithRetry } from '../utils/fetchHelper.js'
 import { sseLines, parseSseData } from '../utils/sse.js'
 import { streamOpenAiChat, parseToolArguments, sameModelRetryError, defaultMaxTokens, type ProviderStreamEvent } from './streamShared.js'
+import { rateLimitFromBody, rateLimitFromHeaders, describeQuotaReset, mergeRateLimit, withRateLimit } from '../utils/rateLimit.js'
 
 /**
  * Universal OpenAI-Compatible provider.
@@ -95,12 +96,25 @@ export class OpenAICompatibleProvider {
 
     if (!res.ok) {
       let errMsg = `HTTP ${res.status}`
+      let body: { error?: { message?: string } } | undefined
       try {
-        const err = await res.json() as { error?: { message?: string } }
-        errMsg = err.error?.message ?? errMsg
+        body = await res.json() as typeof body
+        errMsg = body?.error?.message ?? errMsg
       } catch { /* ignore */ }
 
-      if (res.status === 429) throw new Error(`${this.providerName} rate limit reached. Please wait.`)
+      if (res.status === 429) {
+        let info = (() => { try { return rateLimitFromHeaders(res.headers) } catch { return undefined } })()
+        if (body?.error) {
+          const b = body.error as { code?: unknown; metadata?: unknown; message?: string }
+          info = mergeRateLimit(info, b.code === 429 ? rateLimitFromBody(body) : undefined)
+          try { info = mergeRateLimit(info, rateLimitFromHeaders(new Headers(b.metadata as Record<string, string> ?? {}))) } catch { /* ignore */ }
+        }
+        const reset = describeQuotaReset(info)
+        throw withRateLimit(
+          new Error(`${this.providerName} rate limit reached (HTTP 429): ${errMsg}${reset ? `\n  → ${reset}` : ''}`),
+          info
+        )
+      }
       if (res.status === 401) throw new Error(`${this.providerName}: Invalid API Key. Run /config to update it.`)
       throw new Error(`${this.providerName} error: ${errMsg}`)
     }

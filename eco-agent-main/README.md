@@ -356,6 +356,7 @@ model is still generating. Every REPL turn ends with a timing line:
 | ---------------------------------------- | ----------------------------------------------------------------------- |
 | `first token` takes many seconds         | Provider queue / free-tier capacity, or Gemini thinking tokens. Flash models now default to `thinkingBudget: 0`; switch provider (`/config`) — Groq paid, OpenRouter paid or Ollama local are fastest. |
 | `HTTP 503 … high demand`                 | The provider's queue is full. Eco Agent retries the **same model** automatically (up to 3×, honouring the provider's `retryDelay`). It never switches to another model; use `/config` if you want a different one. |
+| `HTTP 429 — free-models-per-day`          | Free tier counts **requests per day**, not tokens. Eco Agent shows the exact time the quota recovers and stops retrying. Use `/usage` to see session cost; switch provider with `/config` while waiting. |
 | Response feels slow **after** the first words | Large context. Run `/clear` to reset the conversation, or `/save` and start a new session. |
 | Tool output floods the screen            | Tool output is capped at 8 KB (head + tail kept); the full text is never sent to the model. |
 | Long pauses between tool calls           | Each tool call is a fresh model round-trip. Fewer, bigger steps are faster. |
@@ -427,6 +428,24 @@ you can raise the client-side limit:
 ```bash
 set ECO_RPM=60        # requests per minute the client may use
 ```
+
+### Quota transparency: `/usage`, token counts, exact reset times
+
+Free tiers charge by **request count**, not by token volume — OpenRouter's
+`:free` models allow 50 requests/day (1000/day after adding $10 credits), and
+one agent turn can span several requests (every tool call is its own
+round-trip). Eco Agent therefore makes the true cost visible:
+
+- Every turn ends with the request's real token bill:
+  `↳ done in 6.4s, first token 1.2s · 4.7K in · 40 out`
+- `/usage` shows the session totals: how many model requests and how many
+  tokens were spent so far.
+- When the quota is exhausted the message shows **when it recovers**, parsed
+  from the provider itself — for OpenRouter the exact epoch from
+  `X-RateLimit-Reset` (the daily tier resets at 00:00 UTC; that is **07.00
+  WIB**), for Groq/Anthropic their reset/retry-after headers, and for Google
+  the midnight Pacific daily cap — so you know immediately: wait for that
+  time, or switch provider with `/config`.
 
 ### Tips
 

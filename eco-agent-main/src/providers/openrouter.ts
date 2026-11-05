@@ -3,6 +3,7 @@ import { RateLimiter } from '../utils/security.js'
 import { fetchWithRetry } from '../utils/fetchHelper.js'
 import { sseLines, parseSseData } from '../utils/sse.js'
 import { streamOpenAiChat, parseToolArguments, sameModelRetryError, defaultMaxTokens, type ProviderStreamEvent } from './streamShared.js'
+import { rateLimitFromBody, rateLimitFromHeaders, describeQuotaReset, mergeRateLimit, withRateLimit } from '../utils/rateLimit.js'
 import { QuotaGovernor, rpmFromEnv } from '../utils/quota.js'
 import { printNotice } from '../utils/console.js'
 
@@ -105,13 +106,24 @@ export class OpenRouterProvider {
     }, { providerName: 'OpenRouter', onResponse: (r) => { if (r.status === 429) this.quota.onRateLimited(); else if (r.ok) this.quota.onSuccess() } })
 
     if (!res.ok) {
+      let body: { error?: { message?: string; code?: number; metadata?: { headers?: Record<string, string>; limit_source?: string } } } | undefined
       let errMsg = `HTTP ${res.status}`
       try {
-        const err = await res.json() as { error?: { message?: string; code?: number } }
-        errMsg = err.error?.message ?? errMsg
+        body = await res.json() as typeof body
+        errMsg = body?.error?.message ?? errMsg
       } catch { /* ignore */ }
 
-      if (res.status === 429) throw new Error('OpenRouter rate limit reached. Wait a moment and try again.')
+      if (res.status === 429) {
+        const info = mergeRateLimit(
+          body?.error?.metadata ? rateLimitFromBody(body) : undefined,
+          (() => { try { return rateLimitFromHeaders(res.headers) } catch { return undefined } })()
+        )
+        const reset = describeQuotaReset(info)
+        throw withRateLimit(
+          new Error(`OpenRouter: ${errMsg} (HTTP 429)${reset ? `\n  → ${reset}` : ''}\n  → Free tier: 50 req/day, 1000/day with $10 credits. Switch model or provider via /config.`),
+          info
+        )
+      }
       if (res.status === 402) throw new Error('OpenRouter: insufficient credits. Add credits at openrouter.ai/credits')
       if (res.status === 401) throw new Error('OpenRouter: Invalid API Key. Run /config to update it.')
       if (errMsg.includes('Provider returned error')) {

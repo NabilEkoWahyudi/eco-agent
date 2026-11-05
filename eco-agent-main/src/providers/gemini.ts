@@ -3,6 +3,7 @@ import { QuotaGovernor, rpmFromEnv } from '../utils/quota.js'
 import { printNotice } from '../utils/console.js'
 import { fetchWithRetry } from '../utils/fetchHelper.js'
 import { sseLines, parseSseData } from '../utils/sse.js'
+import { describeGeminiQuotaReset } from '../utils/rateLimit.js'
 import type { ProviderStreamEvent } from './streamShared.js'
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
@@ -74,8 +75,9 @@ export class GeminiProvider {
     } catch { /* ignore */ }
 
     if (res.status === 429) throw this._error(res.status,
-      'Gemini rate limit reached (HTTP 429). The free tier quota (requests per minute or tokens per minute) is exhausted — ' +
-      'wait about a minute, use /clear to shrink the context, or switch provider (/config).'
+      'Gemini rate limit reached (HTTP 429). ' +
+      (describeGeminiQuotaReset() + '\n  ') +
+      '→ Per-minute limits recover within about a minute. Use /clear to shrink the context, or switch provider (/config).'
     )
     if (res.status === 400) throw this._error(res.status, `Gemini bad request: ${errMsg}`)
     if (res.status === 403) throw this._error(res.status, 'Gemini: Invalid API Key or API not enabled. Check aistudio.google.com.')

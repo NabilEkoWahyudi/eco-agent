@@ -9,6 +9,7 @@ import { AgentLoop } from '../loop/index.js'
 import { defaultTools, mergeTools } from '../tools/index.js'
 import { PermissionManager, getToolDangerLevel, evaluatePermission, loadSavedRules } from '../permissions/index.js'
 import { ensureLineStart } from '../utils/console.js'
+import { formatTokenCount, describeQuotaReset } from '../utils/rateLimit.js'
 import type { EcoConfig, Tool } from '../utils/types.js'
 import { getSavedConfig, saveConfig, clearConfig, getPonytailMode, savePonytailMode } from '../utils/configStore.js'
 import { runSetupWizard } from '../utils/setupWizard.js'
@@ -29,6 +30,12 @@ import { loadAllSkills, buildSkillsSystemPrompt } from '../skills/index.js'
 import { getAvailableProviders } from '../tools/websearch.js'
 
 const VERSION = '0.1.0'
+/**
+ * Process-lifetime usage accounting. Free tiers (OpenRouter :free = 50 req/day,
+ * Groq free, Google AI Studio) charge by REQUEST count, so showing users how
+ * many model round-trips a session costs is essential context, not decoration.
+ */
+const sessionUsageStats = { requests: 0, promptTokens: 0, completionTokens: 0 }
 const BANNER = `
 ${chalk.green('███████╗ ██████╗ ██████╗      █████╗  ██████╗ ███████╗███╗   ██╗████████╗')}
 ${chalk.green('██╔════╝██╔════╝██╔═══██╗    ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝')}
@@ -371,10 +378,24 @@ async function runREPL(
         case '/exit':
         case '/quit':
           autoSave()
+          if (sessionUsageStats.requests > 0) {
+            console.log(chalk.dim(`  ↳ Session totals: ${sessionUsageStats.requests} model request(s) · ${formatTokenCount(sessionUsageStats.promptTokens)} in · ${formatTokenCount(sessionUsageStats.completionTokens)} out`))
+          }
           console.log(chalk.gray('\n  Goodbye! \n'))
           rl.close()
           process.exit(0)
           break
+
+        case '/usage': {
+          console.log()
+          if (sessionUsageStats.requests === 0) {
+            console.log(chalk.dim('  No model requests yet — nothing to show.'))
+          } else {
+            console.log(chalk.dim(`  ↳ ${sessionUsageStats.requests} model request(s) · ${formatTokenCount(sessionUsageStats.promptTokens)} in · ${formatTokenCount(sessionUsageStats.completionTokens)} out (this session)`))
+          }
+          console.log(chalk.dim('  ↳ Free tiers count REQUESTS, not tokens: OpenRouter :free = 50/day (1000/day with $10 credits).'))
+          break
+        }
 
         case '/config':
           rl.close()
@@ -1048,6 +1069,7 @@ async function runREPL(
           console.log(chalk.bold('  ── Settings ────────────────────────────────────'))
           console.log(`  ${chalk.cyan('/config')}          Switch provider or update API key`)
           console.log(`  ${chalk.cyan('/exit')}            Exit Eco Agent`)
+          console.log(`  ${chalk.cyan('/usage')}            Show model requests & token usage for this session`)
           console.log(renderDivider())
           console.log(chalk.gray('  Tip: Paste multi-line text directly — it is detected automatically.'))
           console.log()
@@ -1089,6 +1111,8 @@ async function runREPL(
     let firstContent = true
     let streamedLive = false
     let firstTokenMs: number | undefined
+    let turnInTokens = 0
+    let turnOutTokens = 0
     const turnStarted = Date.now()
 
     await agent.run(finalInput, {
@@ -1097,6 +1121,16 @@ async function runREPL(
       onFirstToken: (ms) => {
         firstTokenMs = ms
         spinner.update(`Generating (first token in ${(ms / 1000).toFixed(1)}s)`)
+      },
+
+      // Every model round-trip inside this turn reports its token usage.
+      // Free tiers count REQUESTS — this is how the user sees the true cost.
+      onUsage: (u) => {
+        turnInTokens += u.promptTokens
+        turnOutTokens += u.completionTokens
+        sessionUsageStats.requests++
+        sessionUsageStats.promptTokens += u.promptTokens
+        sessionUsageStats.completionTokens += u.completionTokens
       },
 
       onContent: (chunk) => {
@@ -1191,11 +1225,15 @@ async function runREPL(
           console.log(chalk.yellow('  → Type /config to update your API key.'))
         }
         if (err.message.includes('429') || err.message.includes('rate limit') || err.message.includes('quota')) {
-          console.log(chalk.yellow('  → The provider quota is exhausted (free tier: requests/minute or tokens/minute).'))
-          console.log(chalk.yellow('  → Wait ~1 minute, run /clear to shrink the context, or switch provider with /config.'))
+          const rl = (err as { rateLimit?: { resetMs?: number; remaining?: number; limit?: number; source?: string } }).rateLimit
+          const resetLine = rl ? describeQuotaReset(rl) : undefined
+          if (resetLine) console.log(chalk.yellow(`  → ${resetLine}`))
+          else console.log(chalk.yellow('  → The provider quota is exhausted (free tier: requests/minute or tokens/minute).'))
+          console.log(chalk.yellow('  → Free tiers count REQUESTS per minute/day — retrying cannot help until the window resets.'))
+          console.log(chalk.yellow('  → Run /usage to see this session\'s request/token cost, /clear to shrink the context, or switch provider with /config.'))
           console.log(chalk.yellow('  → Current limits: AI Studio → Rate Limit page. Raise the client limit with ECO_RPM.'))
+          firstContent = false
         }
-        firstContent = false
       },
 
       onDone: () => {
@@ -1220,7 +1258,10 @@ async function runREPL(
           // Timing diagnostics — makes slow providers obvious
           const total = ((Date.now() - turnStarted) / 1000).toFixed(1)
           const ttft = firstTokenMs !== undefined ? `, first token ${(firstTokenMs / 1000).toFixed(1)}s` : ''
-          console.log(chalk.dim(`  ↳ done in ${total}s${ttft}`))
+          const tokens = turnInTokens + turnOutTokens > 0
+            ? ` · ${formatTokenCount(turnInTokens)} in · ${formatTokenCount(turnOutTokens)} out`
+            : ''
+          console.log(chalk.dim(`  ↳ done in ${total}s${ttft}${tokens}`))
         }
         console.log()
         responseBuffer = ''

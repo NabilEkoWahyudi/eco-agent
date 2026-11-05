@@ -14,6 +14,13 @@ export interface LoopOptions {
   onError?: (error: Error) => void
   /** Fired once the first token of a streamed response arrives (ms since request). */
   onFirstToken?: (ms: number) => void
+  /**
+   * Fired after EVERY model round-trip with that request's token usage.
+   * Providers that do not report usage produce zeros. This lets the CLI show
+   * "↳ done in 6.4s · 4.7K in · 40 out" and accumulate session totals —
+   * essential context for free tiers that count requests, not tokens.
+   */
+  onUsage?: (usage: { promptTokens: number; completionTokens: number; totalTokens: number }) => void
 }
 
 export class AgentLoop {
@@ -22,6 +29,8 @@ export class AgentLoop {
   private context: ContextManager
   private config: EcoConfig
   private maxIterations: number
+  /** Cumulative usage since this loop start (every turn, every round-trip). */
+  private usageTotalsAcc = { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 }
 
   constructor(provider: Provider, tools: Tool[], config: EcoConfig, sessionMemory = '') {
     this.provider = provider
@@ -121,6 +130,30 @@ export class AgentLoop {
     return finalResponse || maxMsg
   }
 
+  /** Total model requests and tokens recorded by this loop (all turns). */
+  get usageTotals(): { requests: number; promptTokens: number; completionTokens: number; totalTokens: number } {
+    return { ...this.usageTotalsAcc }
+  }
+
+  private countRequest(): void {
+    this.usageTotalsAcc.requests++
+  }
+
+  private recordUsage(
+    usage: { promptTokens?: number; completionTokens?: number; totalTokens?: number } | undefined,
+    opts: LoopOptions
+  ): void {
+    const u = {
+      promptTokens: usage?.promptTokens ?? 0,
+      completionTokens: usage?.completionTokens ?? 0,
+      totalTokens: usage?.totalTokens ?? 0,
+    }
+    this.usageTotalsAcc.promptTokens += u.promptTokens
+    this.usageTotalsAcc.completionTokens += u.completionTokens
+    this.usageTotalsAcc.totalTokens += u.totalTokens
+    opts.onUsage?.(u)
+  }
+
   /**
    * Ask the model for the next step.
    *
@@ -140,7 +173,10 @@ export class AgentLoop {
     const messages = this.context.getMessages()
     const streamFn = this.provider.streamWithTools
     if (typeof streamFn !== 'function') {
-      return { response: await this.provider.complete(messages, tools), streamed: false }
+      this.countRequest()
+      const response = await this.provider.complete(messages, tools)
+      this.recordUsage(response.usage, opts)
+      return { response, streamed: false }
     }
 
     // One streaming attempt + one same-model retry, then a non-streaming
@@ -154,6 +190,7 @@ export class AgentLoop {
       let toolCalls: ToolCall[] | undefined
       let usage: LLMResponse['usage']
       let received = false
+      this.countRequest()
 
       try {
         for await (const event of streamFn.call(this.provider, messages, tools)) {
@@ -183,6 +220,7 @@ export class AgentLoop {
         // If real text already arrived, keep it rather than replaying the
         // answer and duplicating what the user has seen.
         if (content.trim() || toolCalls) {
+          this.recordUsage(usage, opts)
           opts.onError?.(err)
           return {
             response: {
@@ -211,9 +249,11 @@ export class AgentLoop {
       if (!received) {
         // The server answered but produced no usable events. Try the same
         // model once through the non-streaming endpoint below.
+        this.recordUsage(usage, opts)
         break
       }
 
+      this.recordUsage(usage, opts)
       return {
         response: {
           content,
@@ -229,15 +269,21 @@ export class AgentLoop {
     // It is often more reliable when an upstream provider keeps ending the
     // SSE stream early. Retry once more only for upstream errors (network
     // errors already went through fetchWithRetry).
+    this.countRequest()
     try {
-      return { response: await this.provider.complete(messages, tools), streamed: false }
+      const response = await this.provider.complete(messages, tools)
+      this.recordUsage(response.usage, opts)
+      return { response, streamed: false }
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e))
       if ((e as { retrySameModel?: boolean }).retrySameModel === true) {
         printNotice(`\n  ! ${err.message}`)
         printNotice('    → Retrying the same model once more without streaming...')
         await new Promise(r => setTimeout(r, 750))
-        return { response: await this.provider.complete(messages, tools), streamed: false }
+        this.countRequest()
+        const response = await this.provider.complete(messages, tools)
+        this.recordUsage(response.usage, opts)
+        return { response, streamed: false }
       }
       throw err
     }

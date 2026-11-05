@@ -3,6 +3,7 @@
  * Extracted to eliminate code duplication across groq.ts, openrouter.ts, ollama.ts.
  */
 import { printNotice } from './console.js'
+import { rateLimitFromBody, rateLimitFromHeaders, describeQuotaReset, mergeRateLimit } from './rateLimit.js'
 
 export interface RetryOptions {
   maxRetries?: number
@@ -107,14 +108,20 @@ export async function fetchWithRetry(
     // Quota exhausted (repeated 429): stop hammering the API
     if (res.status === 429 && consecutive429 >= maxConsecutive429) {
       let msg = 'rate limit exceeded'
+      let bodyInfo: ReturnType<typeof rateLimitFromBody>
       try {
-        const data = await res.clone().json() as { error?: { message?: string } }
-        msg = data?.error?.message ?? msg
+        const body = await res.clone().json() as { error?: { message?: string } }
+        msg = body?.error?.message ?? msg
+        bodyInfo = rateLimitFromBody(body)
       } catch { /* keep default */ }
+      let headerInfo: ReturnType<typeof rateLimitFromHeaders>
+      try { headerInfo = rateLimitFromHeaders(res.headers) } catch { /* not Header-like */ }
+      const resetLine = describeQuotaReset(mergeRateLimit(headerInfo, bodyInfo))
       printNotice(
         `\n  ! ${providerName}: quota exhausted (HTTP 429 x${consecutive429}) — ${msg}` +
         `\n    → The provider's free tier is rate limited. Eco Agent stopped retrying so it does not waste quota.` +
-        `\n    → Wait a minute, or switch provider (/config) for an instant, unthrottled answer.`
+        (resetLine ? `\n    → ${resetLine}` : '') +
+        `\n    → Wait for the reset, or switch provider (/config) for an instant, unthrottled answer.`
       )
       return res
     }
