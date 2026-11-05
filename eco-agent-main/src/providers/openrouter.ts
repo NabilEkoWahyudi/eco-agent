@@ -135,7 +135,7 @@ export class OpenRouterProvider {
       }
     }
 
-    // Bug fix (ported from opencode): guard against empty/undefined choices
+    // Bug fix: guard against empty/undefined choices
     // Happens when model returns no response (overloaded, tool not supported, etc.)
     if (!data.choices || data.choices.length === 0) {
       throw new Error('OpenRouter: Model did not return any choices (choices empty/undefined). The model may be overloaded or does not support tool calling. Try /config to switch models.')

@@ -349,6 +349,6 @@ export const defaultTools: Tool[] = [
   searchFilesTool,
   listCodeFilesTool,
   webSearchTool,
-  // Extended tools ported from opencode:
+  // Extended tools:
   ...extendedTools,
 ]

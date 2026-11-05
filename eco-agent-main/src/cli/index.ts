@@ -207,7 +207,7 @@ async function runREPL(
   console.log(chalk.gray(`  Tools    : ${chalk.white(tools.length + ' tools loaded')}`))
   console.log(chalk.gray(`  Commands : ${chalk.white('/help /plan /act /swarm /save /sessions /config /exit')}`))
   console.log(chalk.gray(`             ${chalk.white('/tools /clear /history /cd /file /commit /pr /debug /ponytail')}`))
-  console.log(chalk.gray(`             ${chalk.white('/snapshot /skills /providers')}  ${chalk.dim('(ported from opencode)')}`))
+  console.log(chalk.gray(`             ${chalk.white('/snapshot /skills /providers')}`))
   console.log(chalk.gray(`  ${chalk.dim('Tip: press TAB to autocomplete commands')} ${chalk.dim('—')}`))
   console.log(chalk.gray(`  ${chalk.dim('      /he<TAB> → /help  ·  /ponytail <TAB> → off|lite|full|ultra  ·  /cd <TAB> lists files')}`))
   console.log()
@@ -492,7 +492,7 @@ async function runREPL(
           console.log()
           break
 
-        // ── Commands ported from opencode ────────────────────────────────────
+        // ── Additional commands ──────────────────────────────────────────────
 
         case '/snapshot': {
           const subCmd = rest[0]?.toLowerCase()
@@ -1069,7 +1069,7 @@ async function runREPL(
       ? `Before doing anything, write a numbered step-by-step plan of what you will do to accomplish this task. Then ask me: "Shall I proceed? (yes/no)". Wait for my response before using any tools.\n\nTask: ${trimmed}`
       : trimmed
 
-    // ── Auto-snapshot (ported from opencode) ──────────────────────────────
+    // ── Auto-snapshot ─────────────────────────────────────────────────────
     // Capture file state before agent runs so user can diff/restore later
     const preRunSnapshotId = captureSnapshot(process.cwd(), `Before: ${finalInput.slice(0, 60)}`)
 
@@ -1226,7 +1226,7 @@ async function runREPL(
         responseBuffer = ''
         autoSave()
 
-        // ── Post-run snapshot (ported from opencode) ────────────────────────
+        // ── Post-run snapshot ───────────────────────────────────────────────
         // Capture state after run and show diff hint if files were changed
         if (preRunSnapshotId) {
           const postRunSnapshotId = captureSnapshot(process.cwd(), `After: ${finalInput.slice(0, 60)}`)

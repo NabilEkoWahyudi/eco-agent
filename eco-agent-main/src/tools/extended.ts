@@ -110,7 +110,7 @@ export const globFilesTool: Tool = {
 }
 
 // ─────────────────────────────────────────────────────────
-// GREP TOOL - Ported from opencode ripgrep.ts (Node.js native version)
+// GREP TOOL - Node.js native version
 // ─────────────────────────────────────────────────────────
 
 interface GrepMatch {
@@ -226,7 +226,7 @@ export const grepSearchTool: Tool = {
 }
 
 // ─────────────────────────────────────────────────────────
-// PATCH FILE TOOL - Ported from opencode patch.ts
+// PATCH FILE TOOL
 // Applies unified diff patches to files
 // ─────────────────────────────────────────────────────────
 
@@ -329,7 +329,7 @@ export const patchFileTool: Tool = {
 }
 
 // ─────────────────────────────────────────────────────────
-// EDIT FILE TOOL - Ported from opencode edit.ts
+// EDIT FILE TOOL
 // Precise in-file string replacement
 // ─────────────────────────────────────────────────────────
 
@@ -367,7 +367,7 @@ export const editFileTool: Tool = {
 }
 
 // ─────────────────────────────────────────────────────────
-// TODO TOOL - Ported from opencode todo.ts
+// TODO TOOL
 // Session-scoped task tracking
 // ─────────────────────────────────────────────────────────
 
@@ -480,7 +480,7 @@ export const todoReadTool: Tool = {
 }
 
 // ─────────────────────────────────────────────────────────
-// FETCH URL TOOL - Ported from opencode fetch.ts
+// FETCH URL TOOL
 // Fetch web pages and convert to text/markdown
 // ─────────────────────────────────────────────────────────
 

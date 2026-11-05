@@ -232,7 +232,7 @@ export class AgentLoop {
 
     try {
       const result = await tool.execute(toolCall.arguments)
-      // Bug fix (ported from opencode): improved error detection
+      // Bug fix: improved error detection
       // Previously only checked startsWith('error'), missing 'Command failed:', 'failed:', etc.
       const lowerResult = result.toLowerCase()
       const isError = lowerResult.startsWith('error') ||
