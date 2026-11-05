@@ -46,3 +46,10 @@ opencode.zip
 
 # ─── Local screenshots (bug reports, not part of the project) ───────────────
 *.png
+
+# ─── Markdown docs: keep only README files in the repository ────────────────
+*.md
+!README.md
+!README.MD
+!**/README.md
+!**/README.MD
