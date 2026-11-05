@@ -38,7 +38,7 @@ export class AgentLoop {
    *                        Pass [] to run without any tools (e.g. /commit, /pr).
    */
   async run(userInput: string, opts: LoopOptions = {}, toolsOverride?: Tool[]): Promise<string> {
-    const tools = toolsOverride !== undefined ? toolsOverride : this.tools
+    const tools = toolsOverride ?? this.tools
     this.context.addUserMessage(userInput)
     this.context.trimIfNeeded()
 
@@ -102,7 +102,7 @@ export class AgentLoop {
           }
         }
 
-        const result = await this.executeToolCall(toolCall, opts)
+        const result = await this.executeToolCall(toolCall, opts, tools)
         // Keep the context small: huge tool outputs are re-sent with every
         // following request and slow the model down (prefill) a lot.
         const capped = truncateToolOutput(result.output)
@@ -197,12 +197,14 @@ export class AgentLoop {
 
   private async executeToolCall(
     toolCall: ToolCall,
-    opts: LoopOptions
+    opts: LoopOptions,
+    tools: Tool[]
   ): Promise<{ output: string; error: boolean }> {
-    const tool = this.tools.find(t => t.name === toolCall.name)
+    const tool = tools.find(t => t.name === toolCall.name)
 
     if (!tool) {
-      const msg = `Error: Unknown tool "${toolCall.name}". Available tools: ${this.tools.map(t => t.name).join(', ')}`
+      const names = tools.map(t => t.name).join(', ') || '(none)'
+      const msg = `Error: Unknown tool "${toolCall.name}". Available tools: ${names}`
       opts.onToolResult?.(toolCall.name, msg, true)
       return { output: msg, error: true }
     }

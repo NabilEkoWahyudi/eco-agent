@@ -9,16 +9,22 @@
 import http from 'http'
 import { spawn } from 'child_process'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
 // Project root = one level above tests/
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
-const H = 'C:/Users/Ahmad/AppData/Local/Temp/opencode/eco-vanish-home2'
-fs.rmSync(H, { recursive: true, force: true })
-fs.mkdirSync(H + '/.appdata/eco-agent-nodejs/Config', { recursive: true })
-fs.mkdirSync(H + '/.appdata/eco-agent-secrets-nodejs', { recursive: true })
+// Use an isolated HOME so the test never reads/writes the real user config.
+// `conf` resolves a different directory on each platform.
+const H = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-vanish-home2-'))
+const CONFIG_DIR = process.platform === 'win32'
+  ? path.join(H, '.appdata', 'eco-agent-nodejs', 'Config')
+  : process.platform === 'darwin'
+    ? path.join(H, 'Library', 'Preferences', 'eco-agent-nodejs')
+    : path.join(H, '.config', 'eco-agent-nodejs')
+fs.mkdirSync(CONFIG_DIR, { recursive: true })
 
 let callCount = 0
 const server = http.createServer((req, res) => {
@@ -44,14 +50,20 @@ const server = http.createServer((req, res) => {
 await new Promise(r => server.listen(0, '127.0.0.1', r))
 const port = server.address().port
 
-fs.writeFileSync(H + '/.appdata/eco-agent-nodejs/Config/config.json', JSON.stringify({
+fs.writeFileSync(path.join(CONFIG_DIR, 'config.json'), JSON.stringify({
   mode: 'openai-compatible', apiKey: 'test-key', model: 'fake-model',
   baseUrl: `http://127.0.0.1:${port}`, supportsTools: true, ponytailMode: 'full',
 }))
 
-const child = spawn('node', ['dist/cli/index.js'], {
+const child = spawn(process.execPath, [path.join(PROJECT_ROOT, 'dist', 'cli', 'index.js')], {
   cwd: PROJECT_ROOT,
-  env: { ...process.env, USERPROFILE: H, HOME: H, APPDATA: H + '/.appdata' },
+  env: {
+    ...process.env,
+    USERPROFILE: H,
+    HOME: H,
+    APPDATA: path.join(H, '.appdata'),
+    XDG_CONFIG_HOME: path.join(H, '.config'),
+  },
 })
 
 let raw = ''
