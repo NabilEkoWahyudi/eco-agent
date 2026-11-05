@@ -158,8 +158,26 @@ export function mergeRateLimit(...parts: Array<RateLimitInfo | undefined>): Rate
 }
 
 /**
- * Human description of WHEN the quota recovers, in the user's LOCAL time.
- * Returns undefined when the provider gave nothing computable.
+ * Label zona waktu user, mis. "GMT+7 · Asia/Jakarta".
+ * Dipakai agar setiap "quota recovers at ..." tegas menyebut jam berapa
+ * di zona berapa — bukan sekadar "(local time)" yang ambigu.
+ */
+export function localTimeZoneLabel(now = Date.now()): string {
+  const offsetMin = -new Date(now).getTimezoneOffset()
+  const sign = offsetMin >= 0 ? '+' : '-'
+  const abs = Math.abs(offsetMin)
+  const h = Math.floor(abs / 60)
+  const m = abs % 60
+  const gmt = `GMT${sign}${h}${m > 0 ? ':' + String(m).padStart(2, '0') : ''}`
+  let tzName = ''
+  try { tzName = Intl.DateTimeFormat().resolvedOptions().timeZone ?? '' } catch { /* ignore */ }
+  return tzName ? `${gmt} · ${tzName}` : gmt
+}
+
+/**
+ * Human description of WHEN the quota recovers, with the user's timezone
+ * spelled out (e.g. "Fri 07.00, 6 Nov (GMT+7 · Asia/Jakarta)").
+ * Returns undefined when the provider gave us nothing computable.
  */
 export function describeQuotaReset(info: RateLimitInfo | undefined, now = Date.now()): string | undefined {
   if (!info || info.resetMs === undefined) return undefined
@@ -181,7 +199,7 @@ export function describeQuotaReset(info: RateLimitInfo | undefined, now = Date.n
     month: 'short',
   })
   const qualifier = info.source?.includes('daily') ? 'Free-tier daily quota' : 'Quota'
-  return `${qualifier} recovers in ${inStr} — ${at} (local time)`
+  return `${qualifier} recovers in ${inStr} — ${at} (${localTimeZoneLabel(now)})`
 }
 
 /**
@@ -201,7 +219,7 @@ export function describeGeminiQuotaReset(now = Date.now()): string {
     timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(resetMs)
   const h = Math.floor((resetMs - now) / 3_600_000)
-  return `Google free-tier daily quota resets at midnight Pacific — in ${h}h, ${localAt} (local time), date ${pacificDate} PT`
+  return `Google free-tier daily quota resets at midnight Pacific — in ${h}h, ${localAt} (${localTimeZoneLabel(now)}), date ${pacificDate} PT`
 }
 
 /** Epoch ms of the NEXT midnight in America/Los_Angeles after `now` (DST-safe). */
