@@ -53,6 +53,11 @@ opencode.zip
 !README.MD
 !**/README.md
 !**/README.MD
+!CONTRIBUTING.md
+!**/CONTRIBUTING.md
 
 # ─── Tests: local only, never pushed ────────────────────────────────────────
-tests/
+# The regression suite stays private by design (see CONTRIBUTING.md).
+# Only the runner itself is public so `npm test` on a fresh clone works.
+tests/*
+!tests/run-all.mjs
