@@ -2,7 +2,7 @@ import type { Message, LLMResponse, ProviderConfig, Tool } from '../utils/types.
 import { RateLimiter } from '../utils/security.js'
 import { fetchWithRetry } from '../utils/fetchHelper.js'
 import { sseLines, parseSseData } from '../utils/sse.js'
-import { streamOpenAiChat, type ProviderStreamEvent } from './streamShared.js'
+import { streamOpenAiChat, parseToolArguments, sameModelRetryError, defaultMaxTokens, type ProviderStreamEvent } from './streamShared.js'
 
 /**
  * Universal OpenAI-Compatible provider.
@@ -72,7 +72,7 @@ export class OpenAICompatibleProvider {
       model: this.config.model,
       messages: normalizedMessages,
       temperature: this.config.temperature ?? 0.7,
-      max_tokens: this.config.maxTokens ?? 4096,
+      max_tokens: this.config.maxTokens ?? defaultMaxTokens(),
     }
 
     if (normalizedTools.length > 0) {
@@ -128,14 +128,20 @@ export class OpenAICompatibleProvider {
     if (!choice?.message) {
       throw new Error(`${this.providerName}: Model returned an invalid response. Try a different model via /config.`)
     }
+    if (choice.finish_reason === 'error') {
+      throw sameModelRetryError(`${this.providerName}: the upstream provider returned an error before completing the response. The request can be retried safely.`)
+    }
 
     let toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> | undefined
     if (choice.message.tool_calls) {
-      toolCalls = choice.message.tool_calls.map(tc => {
-        let parsedArgs: Record<string, unknown> = {}
-        try { parsedArgs = JSON.parse(tc.function.arguments) as Record<string, unknown> } catch { /* keep empty */ }
-        return { id: tc.id, name: tc.function.name, arguments: parsedArgs }
-      })
+      if (choice.finish_reason === 'length') {
+        throw sameModelRetryError(`${this.providerName}: the tool call was cut off by the output-token limit. The request can be retried safely.`)
+      }
+      toolCalls = choice.message.tool_calls.map(tc => ({
+        id: tc.id,
+        name: tc.function.name,
+        arguments: parseToolArguments(tc.function.arguments, this.providerName, tc.function.name),
+      }))
     }
 
     const usage = data.usage ? {

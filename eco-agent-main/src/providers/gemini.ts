@@ -27,9 +27,6 @@ export class GeminiProvider {
   private config: ProviderConfig
   private apiKey: string
   private baseUrl: string
-  /** While set, skip a recently failing primary model and use the fallback. */
-  private primaryUnavailableUntil = 0
-  private cooldownNoticeShown = false
   /**
    * Quota governor.
    *
@@ -63,6 +60,27 @@ export class GeminiProvider {
     const err = new Error(message) as Error & { status?: number }
     err.status = status
     return err
+  }
+
+  /**
+   * Turn an error response into the same actionable message for both the
+   * streaming and non-streaming endpoints.
+   */
+  private async _throwHttpError(res: Response): Promise<never> {
+    let errMsg = `HTTP ${res.status}`
+    try {
+      const err = await res.json() as { error?: { message?: string; status?: string } }
+      errMsg = err.error?.message ?? errMsg
+    } catch { /* ignore */ }
+
+    if (res.status === 429) throw this._error(res.status,
+      'Gemini rate limit reached (HTTP 429). The free tier quota (requests per minute or tokens per minute) is exhausted — ' +
+      'wait about a minute, use /clear to shrink the context, or switch provider (/config).'
+    )
+    if (res.status === 400) throw this._error(res.status, `Gemini bad request: ${errMsg}`)
+    if (res.status === 403) throw this._error(res.status, 'Gemini: Invalid API Key or API not enabled. Check aistudio.google.com.')
+    if (res.status === 503) throw this._error(res.status, `Gemini is temporarily overloaded (503): ${errMsg}\n  → This is a server-side queue at Google — try again in a minute, use a different model, or switch provider (/config).`)
+    throw this._error(res.status, `Gemini error: ${errMsg}`)
   }
 
   /**
@@ -147,105 +165,52 @@ export class GeminiProvider {
   }
 
   /**
-   * Model used when the selected Gemini model is overloaded (HTTP 503).
-   * Disable the fallback with ECO_GEMINI_FALLBACK=0.
-   */
-  private _fallbackModel(): string | undefined {
-    if (process.env.ECO_GEMINI_FALLBACK === '0') return undefined
-    if (this.config.model === 'gemini-3.8-flash') return 'gemini-2.5-flash'
-    return undefined
-  }
-
-  /**
    * Response-header timeout. A queued Gemini request can otherwise hang for
-   * minutes with the CLI stuck on "Waiting for model...". The primary model
-   * gets a short timeout so the fallback can answer; the last model gets more
-   * room. Override with ECO_GEMINI_TIMEOUT_MS.
+   * minutes with the CLI stuck on "Waiting for model...". Flash models get a
+   * shorter timeout because they should answer almost immediately after
+   * thinking is disabled. Override with ECO_GEMINI_TIMEOUT_MS.
+   *
+   * This timeout NEVER switches models. The selected model stays selected;
+   * on timeout the request fails with a clear error so the user can decide
+   * whether to retry or pick another model with /config.
    */
-  private _timeoutMs(isLast: boolean): number {
+  private _timeoutMs(): number {
     const raw = process.env.ECO_GEMINI_TIMEOUT_MS
     const value = raw ? parseInt(raw, 10) : NaN
     if (Number.isFinite(value) && value > 0) return value
-    return isLast ? 60000 : 10000
-  }
-
-  /** How long to keep using the fallback after the primary model fails. */
-  private _fallbackCooldownMs(): number {
-    const raw = process.env.ECO_GEMINI_FALLBACK_COOLDOWN_MS
-    const value = raw ? parseInt(raw, 10) : NaN
-    if (Number.isFinite(value) && value >= 0) return value
-    return 5 * 60_000
+    return /flash/i.test(this.config.model) ? 30_000 : 60_000
   }
 
   /**
    * POST a generateContent / streamGenerateContent request.
    *
-   * If the primary model is temporarily overloaded (503) or does not respond
-   * in time, try the fallback model instead of leaving the CLI stuck. Other
-   * errors (400/401/403/429) are returned directly.
+   * Always uses the model the user selected. If Gemini is overloaded (503),
+   * fetchWithRetry retries the SAME model with backoff; it never swaps in a
+   * different model behind the user's back.
    */
   private async _post(endpoint: 'generateContent' | 'streamGenerateContent', body: Record<string, unknown>): Promise<Response> {
-    const fallback = this._fallbackModel()
-    const cooldown = fallback !== undefined && this.primaryUnavailableUntil > Date.now()
+    const suffix = endpoint === 'streamGenerateContent' ? '?alt=sse' : ''
+    const { url, headers } = this._buildAuth(`${this.baseUrl}/${this.config.model}:${endpoint}${suffix}`)
+    const timeoutMs = this._timeoutMs()
 
-    if (cooldown && !this.cooldownNoticeShown) {
-      printNotice(`\n  ! ${this.config.model} was unavailable recently; using ${fallback} for now.`)
-      this.cooldownNoticeShown = true
-    } else if (!cooldown) {
-      this.cooldownNoticeShown = false
+    try {
+      return await fetchWithRetry(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      }, {
+        providerName: 'Gemini',
+        onResponse: (r) => this._onResponse(r),
+        timeoutMs,
+      })
+    } catch (error) {
+      if ((error as { timeout?: boolean }).timeout !== true) throw error
+      const timeoutLabel = timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`
+      throw new Error(
+        `Gemini (${this.config.model}) did not respond within ${timeoutLabel}. ` +
+        `Try again, or choose another model with /config. Eco Agent will not switch models automatically.`
+      )
     }
-
-    const models = fallback && fallback !== this.config.model
-      ? (cooldown ? [fallback] : [this.config.model, fallback])
-      : [this.config.model]
-    let lastResponse: Response | undefined
-
-    for (let i = 0; i < models.length; i++) {
-      const model = models[i]
-      const suffix = endpoint === 'streamGenerateContent' ? '?alt=sse' : ''
-      const { url, headers } = this._buildAuth(`${this.baseUrl}/${model}:${endpoint}${suffix}`)
-      const isLast = i === models.length - 1
-      const timeoutMs = this._timeoutMs(isLast)
-
-      let res: Response
-      try {
-        res = await fetchWithRetry(url, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body),
-        }, {
-          providerName: 'Gemini',
-          onResponse: (r) => this._onResponse(r),
-          // Fail fast on the primary model so the fallback can answer now.
-          maxRetries: isLast ? 1 : 0,
-          timeoutMs,
-        })
-      } catch (error) {
-        if ((error as { timeout?: boolean }).timeout !== true) throw error
-        const timeoutLabel = timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`
-        if (isLast) {
-          throw new Error(`Gemini did not respond within ${timeoutLabel}. Try again, switch model with /config, or raise ECO_GEMINI_TIMEOUT_MS.`)
-        }
-        this.primaryUnavailableUntil = Date.now() + this._fallbackCooldownMs()
-        printNotice(`\n  ! ${model} did not respond within ${timeoutLabel}. Falling back to ${models[i + 1]}...`)
-        continue
-      }
-
-      if (res.ok) {
-        if (model === this.config.model) {
-          this.primaryUnavailableUntil = 0
-          this.cooldownNoticeShown = false
-        }
-        return res
-      }
-      if (isLast || res.status !== 503) return res
-
-      this.primaryUnavailableUntil = Date.now() + this._fallbackCooldownMs()
-      lastResponse = res
-      printNotice(`\n  ! ${model} is overloaded (HTTP 503). Falling back to ${models[i + 1]}...`)
-    }
-
-    return lastResponse as Response
   }
 
   async complete(messages: Message[], tools: Tool[] = []): Promise<LLMResponse> {
@@ -286,22 +251,7 @@ export class GeminiProvider {
 
     const res = await this._post('generateContent', body)
 
-    if (!res.ok) {
-      let errMsg = `HTTP ${res.status}`
-      try {
-        const err = await res.json() as { error?: { message?: string; status?: string } }
-        errMsg = err.error?.message ?? errMsg
-      } catch { /* ignore */ }
-
-      if (res.status === 429) throw this._error(res.status,
-        'Gemini rate limit reached (HTTP 429). The free tier quota (requests per minute or tokens per minute) is exhausted — ' +
-        'wait about a minute, use /clear to shrink the context, or switch provider (/config).'
-      )
-      if (res.status === 400) throw this._error(res.status, `Gemini bad request: ${errMsg}`)
-      if (res.status === 403) throw this._error(res.status, 'Gemini: Invalid API Key or API not enabled. Check aistudio.google.com.')
-      if (res.status === 503) throw this._error(res.status, `Gemini is temporarily overloaded (503): ${errMsg}\n  → This is a server-side queue at Google — try again in a minute, use a different model, or switch provider (/config).`)
-      throw this._error(res.status, `Gemini error: ${errMsg}`)
-    }
+    if (!res.ok) await this._throwHttpError(res)
 
     const data = await res.json() as {
       candidates: Array<{
@@ -412,7 +362,8 @@ export class GeminiProvider {
 
     const res = await this._post('streamGenerateContent', body)
 
-    if (!res.ok || !res.body) throw new Error(`Gemini stream error (HTTP ${res.status})`)
+    if (!res.ok) await this._throwHttpError(res)
+    if (!res.body) throw new Error('Gemini stream error: empty response body')
 
     // Server answered with a plain JSON body instead of SSE → translate it
     const contentType = res.headers.get('content-type') ?? ''
@@ -526,7 +477,8 @@ export class GeminiProvider {
 
     const res = await this._post('streamGenerateContent', body)
 
-    if (!res.ok || !res.body) throw new Error(`Gemini stream error (HTTP ${res.status})`)
+    if (!res.ok) await this._throwHttpError(res)
+    if (!res.body) throw new Error('Gemini stream error: empty response body')
 
     for await (const line of sseLines(res)) {
       const json = parseSseData(line)

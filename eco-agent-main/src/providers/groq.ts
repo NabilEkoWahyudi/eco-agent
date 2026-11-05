@@ -2,7 +2,7 @@ import type { Message, LLMResponse, ProviderConfig, Tool } from '../utils/types.
 import { RateLimiter } from '../utils/security.js'
 import { fetchWithRetry } from '../utils/fetchHelper.js'
 import { sseLines, parseSseData } from '../utils/sse.js'
-import { streamOpenAiChat, type ProviderStreamEvent } from './streamShared.js'
+import { streamOpenAiChat, parseToolArguments, sameModelRetryError, defaultMaxTokens, type ProviderStreamEvent } from './streamShared.js'
 
 const GROQ_BASE_URL = 'https://api.groq.com/openai/v1'
 
@@ -64,7 +64,7 @@ export class GroqProvider {
       model: this.config.model,
       messages: groqMessages,
       temperature: this.config.temperature ?? 0.7,
-      max_tokens: this.config.maxTokens ?? 4096
+      max_tokens: this.config.maxTokens ?? defaultMaxTokens()
     }
 
     if (groqTools.length > 0) {
@@ -109,10 +109,16 @@ export class GroqProvider {
     }
 
     const choice = data.choices[0]
+    if (!choice?.message) {
+      throw new Error('Groq: Model returned an invalid response.')
+    }
+    if (choice.finish_reason === 'error') {
+      throw sameModelRetryError('Groq: the upstream provider returned an error before completing the response. The request can be retried safely.')
+    }
     const toolCalls = choice.message.tool_calls?.map(tc => ({
       id: tc.id,
       name: tc.function.name,
-      arguments: JSON.parse(tc.function.arguments) as Record<string, unknown>
+      arguments: parseToolArguments(tc.function.arguments, 'Groq', tc.function.name),
     }))
 
     const usage = data.usage ? {

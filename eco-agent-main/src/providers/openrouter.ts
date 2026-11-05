@@ -2,7 +2,7 @@ import type { Message, LLMResponse, ProviderConfig, Tool } from '../utils/types.
 import { RateLimiter } from '../utils/security.js'
 import { fetchWithRetry } from '../utils/fetchHelper.js'
 import { sseLines, parseSseData } from '../utils/sse.js'
-import { streamOpenAiChat, type ProviderStreamEvent } from './streamShared.js'
+import { streamOpenAiChat, parseToolArguments, sameModelRetryError, defaultMaxTokens, type ProviderStreamEvent } from './streamShared.js'
 import { QuotaGovernor, rpmFromEnv } from '../utils/quota.js'
 import { printNotice } from '../utils/console.js'
 
@@ -85,7 +85,7 @@ export class OpenRouterProvider {
       model: this.config.model,
       messages: orMessages,
       temperature: this.config.temperature ?? 0.7,
-      max_tokens: this.config.maxTokens ?? 4096,
+      max_tokens: this.config.maxTokens ?? defaultMaxTokens(),
     }
 
     if (orTools.length > 0) {
@@ -144,13 +144,19 @@ export class OpenRouterProvider {
     if (!choice?.message) {
       throw new Error('OpenRouter: Model returned an invalid choice (no message). Try a different model via /config.')
     }
+    if (choice.finish_reason === 'error') {
+      throw sameModelRetryError('OpenRouter: the upstream provider returned an error before completing the response. The request can be retried safely.')
+    }
     let toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> | undefined
     if (choice.message.tool_calls) {
-      toolCalls = choice.message.tool_calls.map(tc => {
-        let parsedArgs: Record<string, unknown> = {}
-        try { parsedArgs = JSON.parse(tc.function.arguments) as Record<string, unknown> } catch { /* keep empty */ }
-        return { id: tc.id, name: tc.function.name, arguments: parsedArgs }
-      })
+      if (choice.finish_reason === 'length') {
+        throw sameModelRetryError('OpenRouter: the tool call was cut off by the output-token limit. The request can be retried safely.')
+      }
+      toolCalls = choice.message.tool_calls.map(tc => ({
+        id: tc.id,
+        name: tc.function.name,
+        arguments: parseToolArguments(tc.function.arguments, 'OpenRouter', tc.function.name),
+      }))
     }
 
     const usage = data.usage ? {

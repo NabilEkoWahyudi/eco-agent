@@ -2,6 +2,7 @@ import type { EcoConfig, Tool, ToolCall, PonytailMode, Message, LLMResponse } fr
 import type { Provider } from '../providers/index.js'
 import { ContextManager } from '../context/index.js'
 import { truncateToolOutput } from '../utils/truncate.js'
+import { printNotice } from '../utils/console.js'
 
 export interface LoopOptions {
   onThinking?: () => void
@@ -127,6 +128,10 @@ export class AgentLoop {
    * as they are generated (time-to-first-token) instead of staring at a
    * spinner until the whole answer is ready. Falls back to `complete()` for
    * providers without streaming support.
+   *
+   * IMPORTANT: retries always use the SAME model. Eco Agent must never swap in
+   * a different model behind the user's back — the model selected with
+   * `/config` is the only model this method may call.
    */
   private async callModel(
     tools: Tool[],
@@ -138,60 +143,103 @@ export class AgentLoop {
       return { response: await this.provider.complete(messages, tools), streamed: false }
     }
 
-    const started = Date.now()
-    let firstTokenAt: number | undefined
-    let content = ''
-    let toolCalls: ToolCall[] | undefined
-    let usage: LLMResponse['usage']
-    let received = false
+    // One streaming attempt + one same-model retry, then a non-streaming
+    // attempt with the same model. Total requests stay bounded to 3.
+    const maxStreamAttempts = 2
 
-    try {
-      for await (const event of streamFn.call(this.provider, messages, tools)) {
-        received = true
-        if (event.type === 'text') {
-          if (firstTokenAt === undefined) {
-            firstTokenAt = Date.now() - started
-            opts.onFirstToken?.(firstTokenAt)
+    for (let attempt = 1; attempt <= maxStreamAttempts; attempt++) {
+      const started = Date.now()
+      let firstTokenAt: number | undefined
+      let content = ''
+      let toolCalls: ToolCall[] | undefined
+      let usage: LLMResponse['usage']
+      let received = false
+
+      try {
+        for await (const event of streamFn.call(this.provider, messages, tools)) {
+          received = true
+          if (event.type === 'text') {
+            if (firstTokenAt === undefined) {
+              firstTokenAt = Date.now() - started
+              opts.onFirstToken?.(firstTokenAt)
+            }
+            content += event.text
+            opts.onContent?.(event.text)
+          } else if (event.type === 'tool_calls') {
+            toolCalls = event.toolCalls
+          } else if (event.type === 'usage') {
+            usage = event.usage
           }
-          content += event.text
-          opts.onContent?.(event.text)
-        } else if (event.type === 'tool_calls') {
-          toolCalls = event.toolCalls
-        } else if (event.type === 'usage') {
-          usage = event.usage
         }
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e))
+        // A 4xx error means the REQUEST ITSELF is invalid (bad URL, bad
+        // parameter, invalid API key). Repeating it would only waste time and
+        // add another failed request to the provider dashboard.
+        const status = (e as { status?: number })?.status
+        const isClientError = typeof status === 'number' && status >= 400 && status < 500
+        if (isClientError) throw err
+
+        // If real text already arrived, keep it rather than replaying the
+        // answer and duplicating what the user has seen.
+        if (content.trim() || toolCalls) {
+          opts.onError?.(err)
+          return {
+            response: {
+              content,
+              toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
+              finishReason: toolCalls && toolCalls.length > 0 ? 'tool_calls' : 'stop',
+              usage,
+            },
+            streamed: true,
+          }
+        }
+
+        // Only upstream stream failures get an immediate same-model retry.
+        // Network errors have already been retried by fetchWithRetry; for
+        // those we go straight to the non-streaming attempt below.
+        const retrySameModel = (e as { retrySameModel?: boolean }).retrySameModel === true
+        if (retrySameModel && attempt < maxStreamAttempts) {
+          printNotice(`\n  ! ${err.message}`)
+          printNotice(`    → Retrying the same model (${attempt + 1}/${maxStreamAttempts})...`)
+          await new Promise(r => setTimeout(r, 750 * attempt))
+          continue
+        }
+        break
       }
+
+      if (!received) {
+        // The server answered but produced no usable events. Try the same
+        // model once through the non-streaming endpoint below.
+        break
+      }
+
+      return {
+        response: {
+          content,
+          toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
+          finishReason: toolCalls && toolCalls.length > 0 ? 'tool_calls' : 'stop',
+          usage,
+        },
+        streamed: true,
+      }
+    }
+
+    // Final attempt: same model, non-streaming. This is NOT a model fallback.
+    // It is often more reliable when an upstream provider keeps ending the
+    // SSE stream early. Retry once more only for upstream errors (network
+    // errors already went through fetchWithRetry).
+    try {
+      return { response: await this.provider.complete(messages, tools), streamed: false }
     } catch (e) {
-      // Streaming failed (proxy, unsupported endpoint, …). If we already have
-      // text, keep it; otherwise fall back to the non-streaming API.
-      //
-      // A 4xx error means the REQUEST ITSELF is invalid (bad URL, bad
-      // parameter, invalid API key). Repeating it in another mode would only
-      // waste time and add another failed request to the provider dashboard,
-      // so those errors are surfaced directly.
-      const status = (e as { status?: number })?.status
-      const isClientError = typeof status === 'number' && status >= 400 && status < 500
-      if (isClientError) throw e
-      if (content || toolCalls) {
-        opts.onError?.(e instanceof Error ? e : new Error(String(e)))
-      } else {
+      const err = e instanceof Error ? e : new Error(String(e))
+      if ((e as { retrySameModel?: boolean }).retrySameModel === true) {
+        printNotice(`\n  ! ${err.message}`)
+        printNotice('    → Retrying the same model once more without streaming...')
+        await new Promise(r => setTimeout(r, 750))
         return { response: await this.provider.complete(messages, tools), streamed: false }
       }
-    }
-
-    // The server answered but produced nothing usable → fall back
-    if (!received) {
-      return { response: await this.provider.complete(messages, tools), streamed: false }
-    }
-
-    return {
-      response: {
-        content,
-        toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
-        finishReason: toolCalls && toolCalls.length > 0 ? 'tool_calls' : 'stop',
-        usage,
-      },
-      streamed: true,
+      throw err
     }
   }
 
