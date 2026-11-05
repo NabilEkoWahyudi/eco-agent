@@ -354,8 +354,8 @@ model is still generating. Every REPL turn ends with a timing line:
 
 | Symptom                                  | Cause & fix                                                             |
 | ---------------------------------------- | ----------------------------------------------------------------------- |
-| `first token` takes many seconds         | Provider queue / free-tier capacity. Switch provider (`/config`) — Groq paid, OpenRouter paid or Ollama local are fastest. |
-| `HTTP 503 … high demand`                 | The provider's queue is full. Eco Agent retries automatically (up to 3×, honouring the provider's `retryDelay`) and tells you it is a server-side queue. |
+| `first token` takes many seconds         | Provider queue / free-tier capacity, or Gemini thinking tokens. Flash models now default to `thinkingBudget: 0`; switch provider (`/config`) — Groq paid, OpenRouter paid or Ollama local are fastest. |
+| `HTTP 503 … high demand`                 | The provider's queue is full. Eco Agent retries automatically (up to 3×, honouring the provider's `retryDelay`). If `gemini-3.8-flash` is unavailable, it falls back to `gemini-2.5-flash` for that request; set `ECO_GEMINI_FALLBACK=0` to disable this. |
 | Response feels slow **after** the first words | Large context. Run `/clear` to reset the conversation, or `/save` and start a new session. |
 | Tool output floods the screen            | Tool output is capped at 8 KB (head + tail kept); the full text is never sent to the model. |
 | Long pauses between tool calls           | Each tool call is a fresh model round-trip. Fewer, bigger steps are faster. |
@@ -364,8 +364,9 @@ model is still generating. Every REPL turn ends with a timing line:
 ### Gemini thinking budget
 
 Gemini 3.x spends "thought tokens" **before** the first visible token. On a busy
-free tier that alone can take 30–90 seconds for a one-line answer. Control it
-with an environment variable:
+free tier that alone can take 30–90 seconds for a one-line answer. Eco Agent
+therefore disables thinking by default for **Flash** models (`thinkingBudget: 0`),
+so short questions answer immediately. You can override it:
 
 ```bash
 # Windows (PowerShell / cmd)
@@ -374,10 +375,19 @@ set ECO_THINKING_BUDGET=-1    # dynamic thinking (provider default)
 
 # macOS / Linux
 export ECO_THINKING_BUDGET=0
+export ECO_THINKING_BUDGET=-1   # restore provider default
 ```
 
-Not set → provider default. A fixed budget (e.g. `512`) is a good middle ground
-for complex tasks.
+Not set → `0` for Flash models, provider default for Pro models. A fixed budget
+(e.g. `512`) is a good middle ground for complex tasks.
+
+If `gemini-3.8-flash` returns HTTP 503 (high demand) or does not respond within
+10 seconds, Eco Agent automatically falls back to `gemini-2.5-flash` instead of
+leaving the terminal stuck on “Waiting for model…”. It keeps using the fallback
+for 5 minutes before retrying the primary model. Set `ECO_GEMINI_FALLBACK=0` to
+disable the fallback, `ECO_GEMINI_TIMEOUT_MS` (e.g. `30000`) to change the
+response-header timeout, or `ECO_GEMINI_FALLBACK_COOLDOWN_MS` to change the
+cooldown.
 
 ### Rate limits, 429 and the provider dashboard
 

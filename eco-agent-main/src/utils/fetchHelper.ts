@@ -10,6 +10,12 @@ export interface RetryOptions {
   /** Provider name shown in retry warning messages */
   providerName?: string
   /**
+   * Abort a single attempt if response headers do not arrive within this many
+   * milliseconds. The timer is cleared once headers arrive, so streaming the
+   * body is not cut off.
+   */
+  timeoutMs?: number
+  /**
    * Called for every response the provider returns (before a retry).
    * Used to feed the quota governor (429 = slow down, 200 = recover).
    */
@@ -48,7 +54,7 @@ export async function fetchWithRetry(
   options: RequestInit,
   retryOpts: RetryOptions = {}
 ): Promise<Response> {
-  const { maxRetries = 3, initialDelayMs = 1000, providerName = 'API', onResponse, maxConsecutive429 = 2 } = retryOpts
+  const { maxRetries = 3, initialDelayMs = 1000, providerName = 'API', timeoutMs, onResponse, maxConsecutive429 = 2 } = retryOpts
 
   let retries = 0
   let delayMs = initialDelayMs
@@ -56,9 +62,22 @@ export async function fetchWithRetry(
 
   while (true) {
     let res: Response
+    // Per-attempt timeout for response headers. Once fetch resolves, the timer
+    // is cleared so a long SSE stream is not aborted mid-answer.
+    const controller = timeoutMs && timeoutMs > 0 && !options.signal ? new AbortController() : null
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null
     try {
-      res = await fetch(url, options)
+      res = await fetch(url, {
+        ...options,
+        ...(controller ? { signal: controller.signal } : {}),
+      })
     } catch (networkErr: unknown) {
+      if (timer) clearTimeout(timer)
+      if (controller?.signal.aborted) {
+        const timeoutError = new Error(`${providerName}: no response within ${timeoutMs! / 1000}s.`) as Error & { timeout?: boolean }
+        timeoutError.timeout = true
+        throw timeoutError
+      }
       const err = networkErr as Error & { cause?: unknown }
       if (retries < maxRetries) {
         retries++
@@ -76,6 +95,8 @@ export async function fetchWithRetry(
       const enhanced = new Error(`${providerName}: Connection failed - ${detailed}`)
       ;(enhanced as unknown as { cause: unknown }).cause = err.cause
       throw enhanced
+    } finally {
+      if (timer) clearTimeout(timer)
     }
 
     onResponse?.(res)
