@@ -53,3 +53,6 @@ opencode.zip
 !README.MD
 !**/README.md
 !**/README.MD
+
+# ─── Tests: local only, never pushed ────────────────────────────────────────
+tests/
