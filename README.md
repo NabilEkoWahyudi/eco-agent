@@ -15,6 +15,8 @@
 ╚══════╝ ╚═════╝ ╚═════╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝
 ```
 
+![Eco Agent — TUI in action](docs/eco-agent.jpg)
+
 ## Install
 
 ```bash
